@@ -13,9 +13,10 @@ const User = require('./models/User');
 const app = express();
 const server = http.createServer(app);
 
+// Connect to MongoDB
 connectDB();
 
-// 🔥 THE FIX: Allow both local testing and your live Vercel frontend
+// 🔥 CORS Configuration for both Local and Live environments
 const allowedOrigins = [
   'http://localhost:3000', 
   'https://arisun-chat.vercel.app'
@@ -26,7 +27,7 @@ app.use(cors({
   credentials: true 
 }));
 
-app.use(express.json());
+// Parse incoming JSON (Only one of these needed!)
 app.use(express.json());
 
 // 🕵️ GLOBAL NETWORK LOGGER: See every request that hits the backend
@@ -35,18 +36,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Your routes below...
-// app.use('/api/auth', require('./routes/auth.routes'));
-// ...
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Routes
+// API Routes
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/chat', require('./routes/chat.routes'));
 app.use('/api/upload', require('./routes/upload.routes'));
 
-// 🔥 THE FIX: Apply the same VIP list to your WebSockets
+// 🔥 WebSockets Setup with VIP CORS list
 const io = new Server(server, {
   cors: { 
     origin: allowedOrigins, 
@@ -110,9 +106,9 @@ io.on('connection', (socket) => {
     }
   });
 
-socket.on("call:toggle-video", (data) => {
+  socket.on("call:toggle-video", (data) => {
     io.to(data.toUserId).emit("call:toggle-video", data);
-});
+  });
 
   // ✅ Handle Sending Messages
   socket.on('message:send', async (data) => {
@@ -191,7 +187,6 @@ socket.on("call:toggle-video", (data) => {
       console.log("   ✅ 2. Forwarded 'call:incoming' to User B!");
     } else {
       console.log("   ❌ ERROR: User B is not online or socket ID is missing!");
-      console.log("   Current Online Users Dictionary:", onlineUsers);
     }
   });
 
@@ -202,7 +197,6 @@ socket.on("call:toggle-video", (data) => {
     }
   });
 
-  // 🔥 UPDATED: Pass the entire data package directly to the caller
   socket.on('call:reject', (data) => {
     console.log(`🛑 BACKEND: Rejecting call to ${data.toUserId} because: ${data.reason}`);
     
