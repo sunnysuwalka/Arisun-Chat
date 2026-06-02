@@ -13,7 +13,8 @@ const generateToken = (user) => {
 // REGISTER
 exports.register = async (req, res) => {
   try {
-    const { username, mobile, password } = req.body;
+    // 1. ✅ Grab 'avatar' out of req.body from the frontend relay
+    const { username, mobile, password, avatar } = req.body;
 
     const exists = await User.findOne({
       $or: [{ username }, { mobile }]
@@ -25,10 +26,12 @@ exports.register = async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
+    // 2. ✅ Pass 'avatar' into your MongoDB creation block
     const user = await User.create({
       username,
       mobile,
-      password: hashed
+      password: hashed,
+      avatar: avatar || null // Sets the Cloudinary link, or defaults to null if blank
     });
 
     res.json({
@@ -37,11 +40,12 @@ exports.register = async (req, res) => {
     });
 
   } catch (err) {
+    console.error("❌ REGISTRATION CRASH:", err);
     res.status(500).json({ error: 'Register failed' });
   }
 };
 
-// LOGIN
+// LOGIN (Perfect as is—it returns the whole user object automatically)
 exports.login = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -68,7 +72,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// GET ME
+// GET ME (Perfect as is—it naturally selects everything except the password)
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
