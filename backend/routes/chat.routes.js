@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const { cloudinary } = require('../config/cloudinary');
+const Message = require('../models/Message');
+const auth = require('../middleware/auth');
 
 const {
   getInbox,
@@ -8,10 +10,16 @@ const {
   deleteMessage,
   editMessage,
   reactMessage,
-  getMessages // ✅ Added our new function here
+  getMessages 
 } = require('../controllers/chat.controller');
 
-const auth = require('../middleware/auth');
+// --- HELPER: Extract Cloudinary Public ID from URL ---
+const getPublicIdFromUrl = (url) => {
+  if (!url || !url.includes('cloudinary')) return null;
+  const splitUrl = url.split('/');
+  const folderAndFile = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1]}`;
+  return folderAndFile.split('.')[0];
+};
 
 // 📥 Inbox
 router.get('/inbox', auth, getInbox);
@@ -19,26 +27,9 @@ router.get('/inbox', auth, getInbox);
 // ✅ Mark as read
 router.post('/read', auth, markAsRead);
 
-
 // Edit & React
 router.put('/message/:id', auth, editMessage);
 router.post('/react', auth, reactMessage);
-
-// 💬 Get Room Messages (Keep this at the bottom so it doesn't conflict with /inbox)
-router.get('/:roomId', auth, getMessages); 
-
-module.exports = router;
-
-// --- HELPER: Extract Cloudinary Public ID from URL ---
-const getPublicIdFromUrl = (url) => {
-  if (!url || !url.includes('cloudinary')) return null;
-  // Looks for 'arisun_chat/filename.jpg' and drops the '.jpg'
-  const splitUrl = url.split('/');
-  const folderAndFile = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1]}`;
-  return folderAndFile.split('.')[0];
-};
-const { cloudinary } = require('../config/cloudinary');
-const Message = require('../models/Message');
 
 // --- 1. DELETE SINGLE MESSAGE ---
 router.delete('/message/:msgId', async (req, res) => {
@@ -56,8 +47,7 @@ router.delete('/message/:msgId', async (req, res) => {
     if (msg.url && msg.url.includes('cloudinary') && cloudinary) {
       console.log("☁️ [DELETE] Cloudinary URL detected. Attempting background cleanup...");
       try {
-        const splitUrl = msg.url.split('/');
-        const publicId = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1].split('.')[0]}`;
+        const publicId = getPublicIdFromUrl(msg.url);
         const resourceType = ['video', 'audio'].includes(msg.type) ? 'video' : 'image';
         
         console.log(`☁️ [DELETE] Extracted Public ID: ${publicId}. Resource Type: ${resourceType}`);
@@ -94,8 +84,7 @@ router.delete('/clear/:roomId', async (req, res) => {
       messagesWithMedia.forEach(async (msg) => {
         if (msg.url && msg.url.includes('cloudinary')) {
           try {
-            const splitUrl = msg.url.split('/');
-            const publicId = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1].split('.')[0]}`;
+            const publicId = getPublicIdFromUrl(msg.url);
             const resourceType = ['video', 'audio'].includes(msg.type) ? 'video' : 'image';
             
             await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
@@ -114,3 +103,8 @@ router.delete('/clear/:roomId', async (req, res) => {
   }
 });
 
+// 💬 Get Room Messages (Keep this below the other routes)
+router.get('/:roomId', auth, getMessages); 
+
+// 🔥 EXPORT AT THE VERY BOTTOM 🔥
+module.exports = router;
