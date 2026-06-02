@@ -37,58 +37,71 @@ const getPublicIdFromUrl = (url) => {
   const folderAndFile = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1]}`;
   return folderAndFile.split('.')[0];
 };
-// --- 1. DELETE SINGLE MESSAGE ---
+// --- 1. DELETE SINGLE MESSAGE (Indestructible Version) ---
 router.delete('/message/:msgId', async (req, res) => {
   try {
     const msg = await Message.findById(req.params.msgId);
-    if (!msg) return res.status(404).json({ message: 'Message not found' });
+    if (!msg) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
 
-    // Cloudinary Safety Net
+    // 1. GUARANTEED UI FIX: Always delete from MongoDB first
+    await Message.findByIdAndDelete(req.params.msgId);
+
+    // 2. Quietly attempt to delete from Cloudinary in the background
     if (msg.url && msg.url.includes('cloudinary') && cloudinary) {
       try {
-        const publicId = getPublicIdFromUrl(msg.url);
+        const splitUrl = msg.url.split('/');
+        const publicId = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1].split('.')[0]}`;
         const resourceType = ['video', 'audio'].includes(msg.type) ? 'video' : 'image';
+        
         await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
       } catch (cloudErr) {
-        console.log("Ignored Cloudinary Error:", cloudErr.message);
+        console.log("⚠️ Cloudinary delete skipped (likely ghost file).");
       }
     }
 
-    await Message.findByIdAndDelete(req.params.msgId);
     res.status(200).json({ message: 'Message deleted' });
   } catch (error) {
-    res.status(500).json({ message: 'Delete failed', error: error.message });
+    console.error("❌ DELETE ERROR:", error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// --- 2. CLEAR ENTIRE CHAT ---
+// --- 2. CLEAR ENTIRE CHAT (Indestructible Version) ---
 router.delete('/clear/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
-    const messagesWithMedia = await Message.find({ roomId, url: { $exists: true, $ne: null } });
 
-    // Cloudinary Safety Net
+    const messagesWithMedia = await Message.find({ 
+      roomId, 
+      url: { $exists: true, $ne: null } 
+    });
+
+    // 1. GUARANTEED UI FIX: Wipe MongoDB records immediately
+    await Message.deleteMany({ roomId });
+
+    // 2. Quietly attempt to clean up Cloudinary in the background
     if (messagesWithMedia.length > 0 && cloudinary) {
-      const deletePromises = messagesWithMedia.map(msg => {
-        try {
-          const publicId = getPublicIdFromUrl(msg.url);
-          if (publicId) {
+      messagesWithMedia.forEach(async (msg) => {
+        if (msg.url && msg.url.includes('cloudinary')) {
+          try {
+            const splitUrl = msg.url.split('/');
+            const publicId = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1].split('.')[0]}`;
             const resourceType = ['video', 'audio'].includes(msg.type) ? 'video' : 'image';
-            return cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+            
+            await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+          } catch (cloudErr) {
+            // Completely ignore files that fail to delete
           }
-        } catch (err) {
-           return null;
         }
-        return null;
-      }).filter(Boolean);
-
-      await Promise.allSettled(deletePromises); // Won't crash if one file fails
+      });
     }
 
-    await Message.deleteMany({ roomId });
-    res.status(200).json({ message: 'Chat history permanently deleted' });
+    res.status(200).json({ message: 'Chat history cleared' });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to clear chat', error: error.message });
+    console.error("❌ CLEAR CHAT ERROR:", error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
