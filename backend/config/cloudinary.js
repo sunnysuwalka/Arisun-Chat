@@ -2,6 +2,8 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
 
+console.log("☁️ [CLOUDINARY] Initializing Cloudinary config...");
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -12,7 +14,7 @@ const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'arisun_chat',
-    resource_type: 'auto', // Important: allows video, audio, and images
+    resource_type: 'auto', 
   },
 });
 

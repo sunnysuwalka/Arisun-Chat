@@ -27,6 +27,17 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(express.json());
+
+// 🕵️ GLOBAL NETWORK LOGGER: See every request that hits the backend
+app.use((req, res, next) => {
+  console.log(`\n🌐 [NETWORK] ${req.method} request to: ${req.url}`);
+  next();
+});
+
+// Your routes below...
+// app.use('/api/auth', require('./routes/auth.routes'));
+// ...
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes

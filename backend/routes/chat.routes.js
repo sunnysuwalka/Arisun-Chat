@@ -37,52 +37,60 @@ const getPublicIdFromUrl = (url) => {
   const folderAndFile = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1]}`;
   return folderAndFile.split('.')[0];
 };
-// --- 1. DELETE SINGLE MESSAGE (Indestructible Version) ---
+const { cloudinary } = require('../config/cloudinary');
+const Message = require('../models/Message');
+
+// --- 1. DELETE SINGLE MESSAGE ---
 router.delete('/message/:msgId', async (req, res) => {
+  console.log(`\n🗑️ [DELETE SINGLE] Initiating delete for Message ID: ${req.params.msgId}`);
   try {
     const msg = await Message.findById(req.params.msgId);
     if (!msg) {
+      console.log("❌ [DELETE ERROR] Message not found in database.");
       return res.status(404).json({ message: 'Message not found' });
     }
 
-    // 1. GUARANTEED UI FIX: Always delete from MongoDB first
+    console.log("🗑️ [DELETE] Found message in DB. Deleting from MongoDB now...");
     await Message.findByIdAndDelete(req.params.msgId);
 
-    // 2. Quietly attempt to delete from Cloudinary in the background
     if (msg.url && msg.url.includes('cloudinary') && cloudinary) {
+      console.log("☁️ [DELETE] Cloudinary URL detected. Attempting background cleanup...");
       try {
         const splitUrl = msg.url.split('/');
         const publicId = `${splitUrl[splitUrl.length - 2]}/${splitUrl[splitUrl.length - 1].split('.')[0]}`;
         const resourceType = ['video', 'audio'].includes(msg.type) ? 'video' : 'image';
         
+        console.log(`☁️ [DELETE] Extracted Public ID: ${publicId}. Resource Type: ${resourceType}`);
         await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+        console.log("✅ [DELETE] Cloudinary cleanup successful.");
       } catch (cloudErr) {
-        console.log("⚠️ Cloudinary delete skipped (likely ghost file).");
+        console.log("⚠️ [DELETE WARNING] Cloudinary cleanup failed (probably a ghost file). Error:", cloudErr.message);
       }
     }
 
+    console.log("✅ [DELETE SUCCESS] Single message deletion complete.");
     res.status(200).json({ message: 'Message deleted' });
   } catch (error) {
-    console.error("❌ DELETE ERROR:", error);
+    console.error("❌ [DELETE CRASH] Critical server error during single delete:", error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// --- 2. CLEAR ENTIRE CHAT (Indestructible Version) ---
+// --- 2. CLEAR ENTIRE CHAT ---
 router.delete('/clear/:roomId', async (req, res) => {
+  console.log(`\n💥 [CLEAR CHAT] Initiating clear for Room ID: ${req.params.roomId}`);
   try {
     const { roomId } = req.params;
 
-    const messagesWithMedia = await Message.find({ 
-      roomId, 
-      url: { $exists: true, $ne: null } 
-    });
+    console.log("💥 [CLEAR CHAT] Finding media messages for Cloudinary cleanup...");
+    const messagesWithMedia = await Message.find({ roomId, url: { $exists: true, $ne: null } });
+    console.log(`💥 [CLEAR CHAT] Found ${messagesWithMedia.length} files attached to this chat.`);
 
-    // 1. GUARANTEED UI FIX: Wipe MongoDB records immediately
+    console.log("💥 [CLEAR CHAT] Wiping MongoDB records...");
     await Message.deleteMany({ roomId });
 
-    // 2. Quietly attempt to clean up Cloudinary in the background
     if (messagesWithMedia.length > 0 && cloudinary) {
+      console.log("☁️ [CLEAR CHAT] Attempting Cloudinary cleanup for attached files...");
       messagesWithMedia.forEach(async (msg) => {
         if (msg.url && msg.url.includes('cloudinary')) {
           try {
@@ -92,15 +100,16 @@ router.delete('/clear/:roomId', async (req, res) => {
             
             await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
           } catch (cloudErr) {
-            // Completely ignore files that fail to delete
+             console.log(`⚠️ [CLEAR CHAT] Could not delete ${msg.url} from Cloudinary.`);
           }
         }
       });
     }
 
+    console.log("✅ [CLEAR CHAT SUCCESS] Chat completely wiped.");
     res.status(200).json({ message: 'Chat history cleared' });
   } catch (error) {
-    console.error("❌ CLEAR CHAT ERROR:", error);
+    console.error("❌ [CLEAR CHAT CRASH] Critical server error during clear chat:", error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
