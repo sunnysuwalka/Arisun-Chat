@@ -2,7 +2,6 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -30,7 +29,7 @@ exports.register = async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = Date.now() + 15 * 60 * 1000;
+    const otpExpires = Date.now() + 15 * 60 * 1000; // 15 mins
 
     let user;
 
@@ -67,22 +66,37 @@ exports.register = async (req, res) => {
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      service: 'Gmail', 
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS  
-      }
+    // 🔥 THE FIX: Brevo API via native fetch (bypassing Render SMTP block)
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { email: process.env.EMAIL_USER, name: "Arisun Chat" },
+        to: [{ email: user.email }],
+        subject: "Arisun Chat — Verify Your Account",
+        htmlContent: `
+          <div style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; color: #1C1C2E;">
+            <h2 style="color: #007AFF;">Welcome to Arisun!</h2>
+            <p>Thank you for registering. Please complete your registration process by verifying your account with the code below:</p>
+            <div style="background-color: #F5F7FB; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
+              <h1 style="letter-spacing: 5px; margin: 0; color: #1C1C2E;">${otp}</h1>
+            </div>
+            <p style="font-size: 14px; color: #666;">This code will expire in 15 minutes.</p>
+            <p style="font-size: 14px; color: #666;">If you did not request this, please safely ignore this message.</p>
+          </div>
+        `
+      })
     });
 
-    const mailOptions = {
-      to: user.email,
-      from: process.env.EMAIL_USER,
-      subject: 'Arisun Chat — Verify Your Account',
-      text: `Thank you for registering to Arisun Chat!\n\nComplete your registration process by verifying your account with the code below:\n\n${otp}\n\nIf you did not request this code, please safely ignore this message.\n\nFor your account security, do not share this code with anyone.`
-    };
-
-    await transporter.sendMail(mailOptions);
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("❌ BREVO API ERROR (Register):", errorData);
+      throw new Error("Failed to send OTP email via Brevo API");
+    }
 
     res.json({
       message: 'OTP sent to email',
@@ -203,25 +217,42 @@ exports.forgotPassword = async (req, res) => {
     user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
     await user.save();
 
-    const transporter = nodemailer.createTransport({
-      service: 'Gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
-
     const clientUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetUrl = `${clientUrl}/reset-password/${resetToken}`;
 
-    const mailOptions = {
-      to: user.email,
-      from: process.env.EMAIL_USER,
-      subject: 'Arisun Chat — Password Reset Request',
-      text: `We received a request to reset your password.\n\nClick the link below to set a new password. This link is valid for 1 hour:\n\n${resetUrl}\n\nIf you did not request this, please safely ignore this email and your password will remain unchanged.`
-    };
+    // 🔥 THE FIX: Brevo API via native fetch (bypassing Render SMTP block)
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { email: process.env.EMAIL_USER, name: "Arisun Chat" },
+        to: [{ email: user.email }],
+        subject: "Arisun Chat — Password Reset Request",
+        htmlContent: `
+          <div style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; color: #1C1C2E;">
+            <h2 style="color: #007AFF;">Password Reset Request</h2>
+            <p>We received a request to reset your password. Click the button below to set a new password. This link is valid for 1 hour:</p>
+            <div style="margin: 30px 0;">
+              <a href="${resetUrl}" style="background-color: #007AFF; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold;">Reset Password</a>
+            </div>
+            <p style="font-size: 14px; color: #666;">If the button doesn't work, copy and paste this link into your browser:</p>
+            <p style="font-size: 12px; color: #666; word-break: break-all;">${resetUrl}</p>
+            <p style="font-size: 14px; color: #666; margin-top: 30px;">If you did not request this, please safely ignore this email and your password will remain unchanged.</p>
+          </div>
+        `
+      })
+    });
 
-    await transporter.sendMail(mailOptions);
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("❌ BREVO API ERROR (Forgot Password):", errorData);
+      throw new Error("Failed to send reset email via Brevo API");
+    }
+
     res.status(200).json({ message: 'Password reset link sent to your email.' });
 
   } catch (err) {
