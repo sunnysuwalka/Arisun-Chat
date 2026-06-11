@@ -16,8 +16,8 @@ const generateToken = (user) => {
 // -------------------------
 exports.register = async (req, res) => {
   try {
-    // 🔥 Extract the new E2EE Vault keys and public keys
-    const { username, email, password, avatar, publicKey, signPublicKey, primaryVault, recoveryVault } = req.body;
+    // 🔥 Extract the new PIN Escrow E2EE Vault fields
+    const { username, email, password, avatar, publicKey, signPublicKey, primaryVault, encryptedMasterKey, pinSalt } = req.body;
 
     if (!email || !username) return res.status(400).json({ error: 'Username and Email required' });
     const cleanEmail = email.trim().toLowerCase();
@@ -46,7 +46,8 @@ exports.register = async (req, res) => {
         if (publicKey) existingUser.publicKey = publicKey;
         if (signPublicKey) existingUser.signPublicKey = signPublicKey;
         if (primaryVault) existingUser.primaryVault = primaryVault;
-        if (recoveryVault) existingUser.recoveryVault = recoveryVault;
+        if (encryptedMasterKey) existingUser.encryptedMasterKey = encryptedMasterKey;
+        if (pinSalt) existingUser.pinSalt = pinSalt;
         
         user = await existingUser.save();
       }
@@ -62,7 +63,8 @@ exports.register = async (req, res) => {
         publicKey: publicKey || null,
         signPublicKey: signPublicKey || null,
         primaryVault: primaryVault || null,
-        recoveryVault: recoveryVault || null
+        encryptedMasterKey: encryptedMasterKey || null,
+        pinSalt: pinSalt || null
       });
     }
 
@@ -141,7 +143,8 @@ exports.verifyEmail = async (req, res) => {
         publicKey: user.publicKey,
         signPublicKey: user.signPublicKey,
         primaryVault: user.primaryVault,
-        recoveryVault: user.recoveryVault
+        encryptedMasterKey: user.encryptedMasterKey,
+        pinSalt: user.pinSalt
       }
     });
 
@@ -181,7 +184,8 @@ exports.login = async (req, res) => {
         publicKey: user.publicKey,
         signPublicKey: user.signPublicKey,
         primaryVault: user.primaryVault,
-        recoveryVault: user.recoveryVault
+        encryptedMasterKey: user.encryptedMasterKey,
+        pinSalt: user.pinSalt
       }
     });
 
@@ -280,8 +284,8 @@ exports.resetPassword = async (req, res) => {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     
-    // Note: We DO NOT wipe the primaryVault here yet. The user will use their recovery phrase
-    // to decrypt the recoveryVault and re-encrypt the primaryVault in the frontend.
+    // Note: We DO NOT wipe the primaryVault here yet. The user will use their 6-digit PIN
+    // to decrypt the encryptedMasterKey and re-encrypt the primaryVault in the frontend.
     await user.save();
 
     res.status(200).json({ message: 'Password has been successfully reset.' });

@@ -39,8 +39,13 @@ const userSchema = new mongoose.Schema({
   primaryVault: {
     type: String // Private keys locked with the user's raw login password
   },
-  recoveryVault: {
-    type: String // Private keys locked with the generated 16-char Recovery Phrase
+  
+  // 🔥 NEW: PIN-Based Server Escrow Fields
+  encryptedMasterKey: {
+    type: String // Private keys locked mathematically with the 6-digit PIN
+  },
+  pinSalt: {
+    type: String // The cryptographic salt used during PBKDF2 key derivation
   },
 
   // OTP Verification Fields

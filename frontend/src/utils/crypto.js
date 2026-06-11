@@ -7,7 +7,7 @@ import nacl from 'tweetnacl';
 import util from 'tweetnacl-util';
 
 // ----------------------------------------------------
-// 1. KEY GENERATION
+// 1. KEY GENERATION (Updated for PIN Escrow)
 // ----------------------------------------------------
 export function generateE2EEKeys() {
   // Generate Curve25519 for Encryption
@@ -15,10 +15,8 @@ export function generateE2EEKeys() {
   // Generate Ed25519 for Signatures
   const signKeyPair = nacl.sign.keyPair();
 
-  // Create a 16-character human-readable recovery phrase (e.g., A8F4-B9C2-D3E1-F7G6)
-  const randBytes = nacl.randomBytes(8);
-  const hex = Array.from(randBytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-  const recoveryPhrase = `${hex.slice(0,4)}-${hex.slice(4,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}`;
+  // (The 16-character recovery phrase generation was removed here
+  // because the user now provides a custom 6-digit PIN during registration.)
 
   return {
     publicKeys: {
@@ -28,8 +26,7 @@ export function generateE2EEKeys() {
     privateKeys: {
       encSecretKey: util.encodeBase64(encKeyPair.secretKey),
       signSecretKey: util.encodeBase64(signKeyPair.secretKey),
-    },
-    recoveryPhrase
+    }
   };
 }
 
