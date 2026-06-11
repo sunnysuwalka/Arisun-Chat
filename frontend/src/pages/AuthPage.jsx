@@ -4,13 +4,13 @@ import { useAuthStore } from '../store/authStore';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
-// 🔥 Import the new Crypto Engine
+// 🔥 Import the Crypto Engine
 import { generateE2EEKeys, lockVault, unlockVault } from '../utils/crypto';
 
 const TABS = ['login', 'register'];
 
 export default function AuthPage() {
-  const [tab, setTab] = useState('login'); // 'login', 'register', or 'forgot'
+  const [tab, setTab] = useState('login'); 
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -23,9 +23,6 @@ export default function AuthPage() {
   const [resendCount, setResendCount] = useState(0); 
   const otpRefs = useRef([]);
 
-  // 🔥 Recovery Phrase Display State
-  const [generatedPhrase, setGeneratedPhrase] = useState('');
-
   const [loginForm, setLoginForm] = useState({
     username: '',
     password: ''
@@ -35,6 +32,7 @@ export default function AuthPage() {
     username: '',
     password: '',
     email: '', 
+    pin: '', // 🔥 New PIN State
     avatar: null
   });
 
@@ -45,7 +43,6 @@ export default function AuthPage() {
 
   const navigate = useNavigate();
   
-  // 🔥 Destructured setPrivateKeys to store the unlocked vault in RAM
   const { login, setUser, setToken, setPrivateKeys } = useAuthStore();
 
   const passwordStrength = () => {
@@ -117,8 +114,12 @@ export default function AuthPage() {
   const handleRegister = async (e) => {
     e.preventDefault();
 
-    if (!regForm.username || !regForm.password || !regForm.email) {
-      return toast.error('All fields required');
+    if (!regForm.username || !regForm.password || !regForm.email || !regForm.pin) {
+      return toast.error('All fields are required');
+    }
+
+    if (regForm.pin.length !== 6) {
+      return toast.error('Backup PIN must be exactly 6 digits');
     }
 
     setLoading(true);
@@ -134,16 +135,13 @@ export default function AuthPage() {
       }
 
       // 🔥 1. Generate E2EE Keys
-      const keys = generateE2EEKeys();
+      const keys = await generateE2EEKeys();
 
       // 🔥 2. Lock the Primary Vault with the user's password
       const primaryVault = await lockVault(keys.privateKeys, regForm.password);
 
-      // 🔥 3. Lock the Backup Vault with the generated phrase
-      const recoveryVault = await lockVault(keys.privateKeys, keys.recoveryPhrase);
-
-      // Save the phrase to show the user
-      setGeneratedPhrase(keys.recoveryPhrase);
+      // 🔥 3. Lock the Server Escrow Vault with the 6-digit PIN
+      const pinEscrow = await lockVault(keys.privateKeys, regForm.pin);
 
       const res = await api.post('/auth/register', {
         username: regForm.username,
@@ -153,8 +151,9 @@ export default function AuthPage() {
         // 🔥 Send E2EE fields to backend
         publicKey: keys.publicKeys.encPublicKey,
         signPublicKey: keys.publicKeys.signPublicKey,
-        primaryVault: primaryVault,
-        recoveryVault: recoveryVault
+        primaryVault: primaryVault.encryptedData || primaryVault, // Support old & new crypto utility response
+        encryptedMasterKey: pinEscrow.encryptedData || pinEscrow, 
+        pinSalt: pinEscrow.salt || 'embedded' 
       });
 
       if (res.data.requiresVerification) {
@@ -250,7 +249,6 @@ export default function AuthPage() {
     }
   };
 
-  // 🔥 Forgot Password Logic
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     if (!forgotEmail) return toast.error('Please enter your email');
@@ -296,22 +294,6 @@ export default function AuthPage() {
           {isVerifying ? (
             <div className="animate-fade-in flex flex-col items-center">
               
-              {/* 🔥 RECOVERY PHRASE WARNING */}
-              {generatedPhrase && (
-                <div className="w-full bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 shadow-sm">
-                  <h3 className="text-sm font-bold text-orange-800 flex items-center gap-2 mb-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                    Save Your Recovery Phrase!
-                  </h3>
-                  <p className="text-[12px] text-orange-700 mb-3 leading-relaxed">
-                    Arisun Chat uses End-to-End Encryption. If you forget your password, your chats will be permanently lost unless you have this phrase. Write it down now:
-                  </p>
-                  <div className="bg-white px-3 py-2 border border-orange-200 rounded-lg text-center font-mono font-bold text-gray-900 tracking-wider text-sm select-all">
-                    {generatedPhrase}
-                  </div>
-                </div>
-              )}
-
               <h2 className="text-2xl font-bold text-gray-900 tracking-tight text-center">Verify Email</h2>
               <p className="text-[14px] text-gray-500 text-center mt-2 mb-6">
                 We have sent the OTP to <span className="font-semibold text-gray-900">{regForm.email}</span>
@@ -372,7 +354,6 @@ export default function AuthPage() {
             </div>
           ) : (
             <>
-              {/* Only show the tabs if we are not in the 'forgot' password view */}
               {tab !== 'forgot' && (
                 <div className="flex bg-gray-100 rounded-xl sm:rounded-2xl p-1 mb-6 sm:mb-8 animate-fade-in">
                   {TABS.map(t => (
@@ -496,6 +477,22 @@ export default function AuthPage() {
                     onChange={(e) => setRegForm(f => ({ ...f, email: e.target.value }))}
                   />
 
+                  {/* 🔥 NEW: 6-Digit PIN Field */}
+                  <div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all font-mono tracking-[0.5em] text-center"
+                      placeholder="6-Digit Backup PIN"
+                      value={regForm.pin}
+                      onChange={(e) => setRegForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '') }))}
+                    />
+                    <p className="text-[10px] sm:text-xs text-gray-400 mt-1.5 ml-1 text-center">
+                      This PIN securely backs up your encrypted chats.
+                    </p>
+                  </div>
+
                   <button
                     disabled={loading}
                     className="w-full py-3 mt-2 rounded-xl bg-blue-600 text-white font-medium text-sm sm:text-base hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100"
@@ -505,7 +502,6 @@ export default function AuthPage() {
                 </form>
               )}
 
-              {/* 🔥 NEW: Forgot Password View */}
               {tab === 'forgot' && (
                 <div className="animate-fade-in flex flex-col items-center">
                   <h2 className="text-2xl font-bold text-gray-900 tracking-tight text-center">Reset Password</h2>
