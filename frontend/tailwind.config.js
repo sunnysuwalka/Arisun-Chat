@@ -3,15 +3,27 @@ module.exports = {
   content: ['./src/**/*.{js,jsx,ts,tsx}'],
   theme: {
     extend: {
-      fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'monospace'],
-      },
       colors: {
-        primary: { 50: '#f0f4ff', 100: '#e0e9ff', 400: '#7B8FF7', 500: '#4F6EF7', 600: '#3A57E8', 700: '#2940CC' },
-        surface: { 0: '#08080F', 50: '#0F0F1A', 100: '#14141F', 200: '#1C1C2E', 300: '#242438', 400: '#2E2E48', 500: '#3A3A58' },
-        accent: { cyan: '#00D4FF', green: '#00E5A0', amber: '#FFB020', red: '#FF4A6B', purple: '#A855F7' },
+        arisun: {
+          base: '#0B1120',      // Deepest background
+          surface: '#111827',   // Main UI panels
+          elevated: '#1F2937',  // Floating elements/modals
+          primary: '#007AFF',   // Signature Blue
+          'primary-subtle': 'rgba(0, 122, 255, 0.1)',
+          danger: '#FF3B30',    // System Red
+          success: '#10B981',   // Online Emerald
+          title: '#F9FAFB',     // Pure white headers
+          body: '#E5E7EB',      // Off-white message text
+          muted: '#9CA3AF',     // Subtitles & timestamps
+          border: '#374151',    // Subtle dividers
+        }
       },
+      
+      fontFamily: {
+        sans: ['Outfit', 'sans-serif'],
+        display: ['Outfit', 'sans-serif'],
+      },
+
       animation: {
         'fade-up': 'fadeUp 0.3s ease forwards',
         'slide-in': 'slideIn 0.25s ease forwards',

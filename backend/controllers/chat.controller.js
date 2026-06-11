@@ -76,23 +76,27 @@ exports.clearChat = async (req, res) => {
   }
 };
 
-// ADD THIS TO THE BOTTOM OF chat.controller.js
-
+// 🔥 UPDATED: Infinite Scroll Pagination Engine
 exports.getMessages = async (req, res) => {
   try {
     const { roomId } = req.params;
-    
-    // Find all messages for this room and sort them by time (oldest to newest)
-    const messages = await Message.find({ roomId }).sort({ createdAt: 1 });
-    
-    res.json(messages);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    // Fetch the newest messages first so we can paginate backwards in history
+    const messages = await Message.find({ roomId })
+      .sort({ createdAt: -1 }) 
+      .skip(skip)
+      .limit(limit);
+
+    // Reverse them back to chronological order (oldest to newest) for the React UI
+    res.json(messages.reverse());
   } catch (err) {
     console.error('Failed to load messages:', err);
     res.status(500).json({ error: 'Failed to load messages' });
   }
 };
-
-// ✅ Add these back to the bottom of chat.controller.js
 
 exports.editMessage = async (req, res) => {
   try {
@@ -141,4 +145,3 @@ exports.reactMessage = async (req, res) => {
     res.status(500).json({ error: 'Reaction failed' });
   }
 };
-

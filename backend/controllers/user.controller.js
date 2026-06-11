@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Request = require('../models/Request');
+const bcrypt = require('bcryptjs'); // 🔥 Added for the password update function
 
 // 🔍 SEARCH
 exports.searchUsers = async (req, res) => {
@@ -95,4 +96,43 @@ exports.unblockUser = async (req, res) => {
     await User.findByIdAndUpdate(req.user.id, { $pull: { blockedUsers: userId } });
     res.json({ success: true });
   } catch { res.status(500).json({ error: 'Unblock failed' }); }
+};
+
+// ✏️ UPDATE PROFILE (Feature #10 - General Tab & Avatar)
+exports.updateProfile = async (req, res) => {
+  try {
+    const { username, mobile, avatar } = req.body;
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { username, mobile, avatar },
+      { new: true } 
+    ).select('-password'); 
+
+    res.status(200).json({ user: updatedUser });
+  } catch (err) {
+    console.error("Profile Update Error:", err);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+};
+
+// 🔒 UPDATE PASSWORD (Feature #10 - Security Tab)
+exports.updatePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user.id);
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Incorrect current password' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    console.error("Password Update Error:", err);
+    res.status(500).json({ error: "Failed to update password" });
+  }
 };

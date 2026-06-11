@@ -56,6 +56,10 @@ const onlineUsers = {};
 io.on('connection', (socket) => {
   // ✅ Handle Online Status
   socket.on('user:online', (userId) => {
+
+    // Add this line so the user can receive personal background notifications
+    socket.join(userId);
+
     onlineUsers[userId] = socket.id;
     io.emit('users:online', Object.keys(onlineUsers));
   });
@@ -167,8 +171,19 @@ io.on('connection', (socket) => {
 
       const targetSocket = onlineUsers[receiverId];
       if (targetSocket) {
+        // Update the receiver's sidebar
         io.to(targetSocket).emit('inbox:update');
+
+        // 🔥 THE FIX: Use your existing `targetSocket` and `msg` variables safely
+        const receiverSocket = io.sockets.sockets.get(targetSocket);
+        const isInRoom = receiverSocket && receiverSocket.rooms.has(roomId);
+
+        // If User A is NOT actively in the room with User C, emit directly to their socket
+        if (!isInRoom) {
+          io.to(targetSocket).emit('message:new', msg);
+        }
       }
+
     } catch (err) {
       console.error('❌ MESSAGE CATCH ERROR:', err);
     }
@@ -221,6 +236,24 @@ io.on('connection', (socket) => {
       io.emit('users:online', Object.keys(onlineUsers));
     }
   });
+});
+
+// Paste this at the absolute bottom of your backend server.js file:
+
+const mongoose = require('mongoose'); // Just in case it's not globally available at the bottom
+
+mongoose.connection.once('open', async () => {
+  try {
+    const db = mongoose.connection.db;
+    const collections = await db.listCollections({ name: 'users' }).toArray();
+    
+    if (collections.length > 0) {
+      await db.collection('users').dropIndex('mobile_1');
+      console.log('🔥 BRUTE FORCE SUCCESS: Stale "mobile_1" index has been destroyed!');
+    }
+  } catch (err) {
+    console.log('ℹ️ Index note:', err.message);
+  }
 });
 
 const PORT = process.env.PORT || 5000;

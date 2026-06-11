@@ -7,6 +7,8 @@ import { getSocket } from '../utils/socket';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
+// 🔥 Import the new E2EE Crypto Engine
+import { encryptMessage, decryptMessage } from '../utils/crypto';
 
 const formatSec = (sec) => {
   if (isNaN(sec) || !isFinite(sec)) return "0:00";
@@ -30,13 +32,26 @@ export default function ChatWindow({ contact }) {
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
 
+  // Scroll & Unread Tracking States
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const isScrolledUpRef = useRef(false);
+  const chatContainerRef = useRef(null);
+
+  // 🔥 Pagination States
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const previousScrollHeightRef = useRef(0);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const menuRef = useRef(null);
 
-  const { messages, loadMessages, typingUsers, loadContacts, loadInbox, removeMessage, updateMessage, setActiveContact, addMessage, setCallState } = useChatStore();
-  const { user } = useAuthStore();
+  // 🔥 Extracted hasMore and roomPages for Infinite Scroll
+  const { messages, loadMessages, typingUsers, loadContacts, loadInbox, removeMessage, updateMessage, setActiveContact, setCallState, hasMore, roomPages } = useChatStore();
+  
+  // 🔥 Extract privateKeys from auth store for memory-safe encryption/decryption
+  const { user, privateKeys } = useAuthStore();
   const socket = getSocket();
 
   const myId = user?._id || user?.id || user?.userId;
@@ -47,15 +62,21 @@ export default function ChatWindow({ contact }) {
   const isOnline = useChatStore(s => s.onlineUsers.includes(contactId));
   const isTyping = (typingUsers[roomId] || []).includes(contactId);
 
-  
+  // Reset scroll state when changing chat rooms
+  useEffect(() => {
+    setIsScrolledUp(false);
+    isScrolledUpRef.current = false;
+    setUnreadCount(0);
+  }, [roomId]);
 
+  // Stripped out the message:new listener entirely so it doesn't collide with ChatPage.jsx
   useEffect(() => {
     if (!contact || !myId) return;
     
     const joinRoom = () => socket.emit('room:join', roomId);
     
     joinRoom();
-    loadMessages(roomId);
+    loadMessages(roomId, 1); // 🔥 Always load page 1 when opening a chat
     setEditingMessage(null);
     setReplyingTo(null);
     setText('');
@@ -63,21 +84,78 @@ export default function ChatWindow({ contact }) {
 
     socket.on('connect', joinRoom);
 
-    const handleNewMessage = (newMessage) => {
-      addMessage(roomId, newMessage);
-    };
-    
-    socket.on('message:new', handleNewMessage);
-
     return () => {
       socket.off('connect', joinRoom);
-      socket.off('message:new', handleNewMessage);
     };
-  }, [contactId, roomId, myId, socket, loadMessages, addMessage]);
+  }, [contactId, roomId, myId, socket, loadMessages]);
+
+  // 🔥 THE NEW SCROLL HANDLER: Infinite Scroll + Unread Logic
+  const handleScroll = async () => {
+    if (!chatContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+    
+    // 1. Infinite Scroll Math: If we hit the absolute top
+    if (scrollTop === 0 && hasMore[roomId] && !isLoadingOlder) {
+      setIsLoadingOlder(true);
+      previousScrollHeightRef.current = scrollHeight; // Remember how tall the container was
+      const nextPage = (roomPages[roomId] || 1) + 1;
+      await loadMessages(roomId, nextPage);
+      setIsLoadingOlder(false);
+    }
+
+    // 2. Smart Scroll Math
+    const isUp = scrollHeight - scrollTop - clientHeight > 150;
+
+    if (isScrolledUpRef.current !== isUp) {
+      isScrolledUpRef.current = isUp;
+      setIsScrolledUp(isUp);
+    }
+
+    if (!isUp && unreadCount > 0) {
+      setUnreadCount(0);
+    }
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setUnreadCount(0);
+    setIsScrolledUp(false);
+    isScrolledUpRef.current = false;
+  };
+
+  // 🔥 INTELLIGENT AUTO-SCROLL INTERCEPTOR
+  const prevMsgCount = useRef(roomMessages.length);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [roomMessages.length, isTyping]);
+    // 1. Restore scroll position if we just fetched older messages
+    if (previousScrollHeightRef.current > 0 && chatContainerRef.current) {
+      const newScrollHeight = chatContainerRef.current.scrollHeight;
+      chatContainerRef.current.scrollTop = newScrollHeight - previousScrollHeightRef.current;
+      previousScrollHeightRef.current = 0; // Reset
+      prevMsgCount.current = roomMessages.length; // Update count
+      return; // Exit early so it doesn't jump to bottom!
+    }
+
+    // 2. Normal Auto-Scroll for New Messages
+    const isNewMessage = roomMessages.length > prevMsgCount.current;
+
+    if (isNewMessage) {
+      const latestMsg = roomMessages[roomMessages.length - 1];
+      if (latestMsg) {
+        const isMine = latestMsg.sender === myId || latestMsg.senderId === myId;
+
+        if (isMine || !isScrolledUpRef.current) {
+          setTimeout(() => scrollToBottom(), 50); 
+        } else {
+          setUnreadCount(prev => prev + 1);
+        }
+      }
+    } else if (isTyping && !isScrolledUpRef.current) {
+      setTimeout(() => scrollToBottom(), 50);
+    }
+
+    prevMsgCount.current = roomMessages.length;
+  }, [roomMessages.length, isTyping, myId]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -102,10 +180,34 @@ export default function ChatWindow({ contact }) {
     e?.preventDefault();
     if (!text.trim()) return;
 
+    // 🔥 E2EE: Ensure vault is unlocked before sending text messages
+    if (!privateKeys) {
+      toast.error("Vault is locked! Please re-login to send messages.");
+      return;
+    }
+
+    let encryptedText = text.trim();
+
+    // 🔥 ENCRYPT THE MESSAGE TEXT
+    if (contact.publicKey && user.publicKey) {
+      try {
+        encryptedText = encryptMessage(
+          encryptedText,
+          privateKeys,
+          contact.publicKey, // Their Curve25519 public key
+          user.publicKey     // Our Curve25519 public key
+        );
+      } catch (err) {
+        toast.error('Encryption Engine Failure');
+        console.error(err);
+        return;
+      }
+    }
+
     if (editingMessage) {
       try {
         const msgId = editingMessage._id || editingMessage.id;
-        const res = await api.put(`/chat/message/${msgId}`, { text: text.trim() });
+        const res = await api.put(`/chat/message/${msgId}`, { text: encryptedText });
         updateMessage(roomId, msgId, { text: res.data.text, edited: true });
         setEditingMessage(null);
         setText('');
@@ -118,7 +220,7 @@ export default function ChatWindow({ contact }) {
     socket.emit('message:send', {
       roomId,
       message: { 
-        text: text.trim(), 
+        text: encryptedText, 
         type: 'text', 
         sender: myId,
         replyTo: replyingTo ? (replyingTo._id || replyingTo.id) : null 
@@ -250,7 +352,7 @@ export default function ChatWindow({ contact }) {
       } 
       else if (type === 'clear_chat') {
         await api.delete(`/chat/clear/${roomId}`);
-        loadMessages(roomId);
+        loadMessages(roomId, 1);
         toast.success('Chat cleared');
       } 
       else if (type === 'remove_friend') {
@@ -275,7 +377,7 @@ export default function ChatWindow({ contact }) {
 
   const triggerEdit = (msg) => {
     setEditingMessage(msg);
-    setText(msg.text);
+    setText(msg.text); // Since we pass the decrypted msg to the trigger, this correctly sets the unencrypted text in the input
   };
 
   const handleReact = async (msgId, emoji) => {
@@ -287,9 +389,31 @@ export default function ChatWindow({ contact }) {
     }
   };
 
+  // 🔥 PROCESS MESSAGES BEFORE RENDERING (Decryption Engine)
+  const decryptedMessages = roomMessages.map(msg => {
+    let displayMsg = { ...msg };
+    const isMine = displayMsg.sender === myId || displayMsg.senderId === myId;
+    
+    if (displayMsg.type === 'text' && displayMsg.text && displayMsg.text.length > 50 && privateKeys) {
+      const senderEncPubKey = isMine ? user.publicKey : contact.publicKey;
+      const senderSignPubKey = isMine ? user.signPublicKey : contact.signPublicKey;
+      
+      if (senderEncPubKey && senderSignPubKey) {
+        displayMsg.text = decryptMessage(
+          displayMsg.text, 
+          privateKeys, 
+          senderEncPubKey, 
+          senderSignPubKey, 
+          isMine
+        );
+      }
+    }
+    return displayMsg;
+  });
+
   let lastSeenMsgId = null;
-  for (let i = roomMessages.length - 1; i >= 0; i--) {
-    const m = roomMessages[i];
+  for (let i = decryptedMessages.length - 1; i >= 0; i--) {
+    const m = decryptedMessages[i];
     if ((m.sender === myId || m.senderId === myId) && m.seen) {
       lastSeenMsgId = m._id || m.id;
       break;
@@ -297,7 +421,6 @@ export default function ChatWindow({ contact }) {
   }
 
   return (
-    // 🔥 RESPONSIVE FIX: w-full added to ensure it fills the remaining space seamlessly
     <div className="flex flex-col h-full w-full bg-[#F8FAFC] relative">
       
       {/* CONFIRMATION MODAL */}
@@ -332,7 +455,6 @@ export default function ChatWindow({ contact }) {
       )}
 
       {/* HEADER */}
-      {/* 🔥 RESPONSIVE FIX: px-4 on mobile, px-6 on larger screens */}
       <div className="px-4 sm:px-6 py-3 sm:py-4 bg-white border-b flex justify-between items-center z-20">
         <div className="flex items-center gap-2 sm:gap-3">
           <Avatar user={contact} size={42} online={isOnline} />
@@ -383,15 +505,25 @@ export default function ChatWindow({ contact }) {
       </div>
 
       {/* MESSAGES */}
-      {/* 🔥 RESPONSIVE FIX: Dynamic padding */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col">
-        {roomMessages.map((msg, i) => (
+      <div 
+        ref={chatContainerRef} 
+        onScroll={handleScroll} 
+        className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col"
+      >
+        {/* 🔥 Loading Spinner for Older Messages */}
+        {isLoadingOlder && (
+          <div className="flex justify-center py-2 animate-fade-in">
+            <div className="w-5 h-5 border-2 border-[#007AFF]/30 border-t-[#007AFF] rounded-full animate-spin" />
+          </div>
+        )}
+
+        {decryptedMessages.map((msg, i) => (
           <MessageBubble
             key={msg._id || i}
             message={msg}
             isMine={msg.sender === myId || msg.senderId === myId}
             isLastSeen={(msg._id || msg.id) === lastSeenMsgId}
-            repliedToMessage={msg.replyTo ? roomMessages.find(m => (m._id || m.id) === msg.replyTo) : null}
+            repliedToMessage={msg.replyTo ? decryptedMessages.find(m => (m._id || m.id) === msg.replyTo) : null}
             onReply={() => setReplyingTo(msg)}
             onDelete={() => requestDeleteMessage(msg._id || msg.id)}
             onEdit={() => triggerEdit(msg)}
@@ -413,9 +545,25 @@ export default function ChatWindow({ contact }) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* FLOATING SCROLL-TO-BOTTOM BUTTON */}
+      {isScrolledUp && (
+        <div className="absolute right-4 sm:right-6 bottom-[85px] sm:bottom-[95px] z-30 animate-fade-in">
+          <button
+            onClick={scrollToBottom}
+            className="w-10 h-10 bg-white border border-gray-200 shadow-xl rounded-full flex items-center justify-center text-[#007AFF] hover:bg-blue-50 transition active:scale-95 relative"
+          >
+            <DownArrowIcon />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-[#FF3B30] text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* INPUT */}
-      {/* 🔥 RESPONSIVE FIX: Padding adjustments */}
-      <div className="p-3 sm:p-4 border-t bg-white flex flex-col">
+      <div className="p-3 sm:p-4 border-t bg-white flex flex-col z-20">
         {editingMessage && (
           <div className="flex justify-between items-center max-w-4xl mx-auto w-full mb-2 px-1 sm:px-2">
             <span className="text-[12px] sm:text-[13px] font-medium text-[#007AFF] flex items-center gap-1.5">
@@ -500,7 +648,8 @@ export default function ChatWindow({ contact }) {
   );
 }
 
-// Icons (Untouched)
+// Icons
+const DownArrowIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>);
 const PhoneIcon = () => (<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>);
 const VideoIcon = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>);
 const MoreIcon = () => (<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>);

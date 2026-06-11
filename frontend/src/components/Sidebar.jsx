@@ -1,15 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Avatar from './Avatar';
+import Profile from './Profile';
 import { useChatStore } from '../store/chatStore';
 import { useAuthStore } from '../store/authStore';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { getSocket } from '../utils/socket';
 
-// 🔥 THE DECODER: Translates our hidden JSON back into a clean preview string
-const formatLastMessage = (msg) => {
+// 🔥 THE SUPERCHARGED DECODER (Feature #12)
+const formatLastMessage = (msg, myId) => {
   if (!msg) return 'Start chatting';
   
+  // 1. Check for Reactions First!
+  if (msg.reactions && msg.reactions.length > 0) {
+    const lastReaction = msg.reactions[msg.reactions.length - 1];
+    const isMyReaction = lastReaction.userId === myId;
+    const prefix = isMyReaction ? 'You reacted' : 'Reacted';
+    
+    // Give a tiny preview of what was reacted to
+    const targetPreview = msg.type === 'text' 
+      ? ` to: "${msg.text.substring(0, 10)}${msg.text.length > 10 ? '...' : ''}"`
+      : ' to an attachment';
+
+    return `${prefix} ${lastReaction.emoji}${targetPreview}`;
+  }
+
+  // 2. Handle Calls
   if (msg.type === 'text') {
     if (msg.text && msg.text.startsWith('📞CALL_LOG::')) {
       try {
@@ -24,12 +40,13 @@ const formatLastMessage = (msg) => {
         }
         return `${callType === 'video' ? 'Video' : 'Audio'} call`;
       } catch (e) {
-        // If parsing fails, just let it fall through to text
+        // Fall through
       }
     }
     return msg.text;
   }
   
+  // 3. Handle Attachments
   return 'Sent an attachment';
 };
 
@@ -38,6 +55,7 @@ export default function Sidebar({ onSelectContact }) {
   const [searchResults, setSearchResults] = useState([]);
   const [showRequests, setShowRequests] = useState(false);
   const [sentRequests, setSentRequests] = useState([]); 
+  const [showProfile, setShowProfile] = useState(false);
   const searchTimeout = useRef(null);
 
   const { 
@@ -126,7 +144,7 @@ export default function Sidebar({ onSelectContact }) {
   });
 
   return (
-    <div className="flex flex-col h-full w-full md:w-[340px] flex-shrink-0 bg-white border-r border-gray-100">
+    <div className="flex flex-col h-full w-full md:w-[340px] flex-shrink-0 bg-white border-r border-gray-100 relative">
       <div className="p-5">
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">Messages</h1>
@@ -224,9 +242,9 @@ export default function Sidebar({ onSelectContact }) {
                   <div className="flex justify-between items-baseline">
                     <p className="font-semibold text-gray-900 truncate">{contact.username}</p>
                   </div>
-                  {/* 🔥 UI FIX: Route the last message through our new decoder */}
+                  {/* 🔥 Passed user ID into the decoder so it knows if it was "You" or someone else */}
                   <p className={`text-sm truncate ${item.unreadCount > 0 ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
-                    {formatLastMessage(item.lastMessage)}
+                    {formatLastMessage(item.lastMessage, user?._id || user?.id)}
                   </p>
                 </div>
                 {item.unreadCount > 0 && (
@@ -239,12 +257,17 @@ export default function Sidebar({ onSelectContact }) {
       </div>
 
       <div className="p-4 border-t flex justify-between items-center bg-gray-50">
-        <div className="flex items-center gap-2">
+        <button 
+          onClick={() => setShowProfile(true)}
+          className="flex items-center gap-2 hover:opacity-70 transition text-left"
+        >
           <Avatar user={user} size={32} />
           <span className="text-sm font-semibold text-gray-900 truncate max-w-[120px]">{user?.username}</span>
-        </div>
+        </button>
         <button onClick={logout} className="text-xs text-red-500 font-medium hover:underline">Logout</button>
       </div>
+
+      {showProfile && <Profile onClose={() => setShowProfile(false)} />}
     </div>
   );
 }

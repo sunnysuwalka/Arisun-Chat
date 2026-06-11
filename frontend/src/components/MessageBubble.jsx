@@ -12,7 +12,12 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
   const [isImageOpen, setIsImageOpen] = useState(false);
   const [isVideoOpen, setIsVideoOpen] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  
+  const [isTouchActive, setIsTouchActive] = useState(false);
+  
   const menuRef = useRef(null);
+  const bubbleRef = useRef(null);
+  const pressTimer = useRef(null);
 
   const formatTime = (iso) => {
     if (!iso) return '';
@@ -33,18 +38,63 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
       if (menuRef.current && !menuRef.current.contains(event.target)) {
         setShowMenu(false);
       }
+      if (bubbleRef.current && !bubbleRef.current.contains(event.target)) {
+        setIsTouchActive(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      if (pressTimer.current) clearTimeout(pressTimer.current);
+    };
   }, []);
+
+  const handlePressStart = () => {
+    pressTimer.current = setTimeout(() => {
+      setIsTouchActive(true);
+      setShowMenu(true);
+      if (window.navigator && window.navigator.vibrate) {
+        window.navigator.vibrate(50);
+      }
+    }, 400); 
+  };
+
+  const handlePressEnd = () => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current);
+    }
+  };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.text);
     toast.success('Copied to clipboard');
     setShowMenu(false);
+    setIsTouchActive(false);
   };
 
-  // 🔥 THE DECODER: Sniff out the secret prefix, strip it, and parse the JSON!
+  // 🔥 THE FIX: Quote Scroll Handler
+  const handleQuoteClick = (e, targetId) => {
+    e.stopPropagation();
+    const targetBubble = document.getElementById(`bubble-${targetId}`);
+    
+    if (targetBubble) {
+      // 1. Scroll it into the center of the screen
+      targetBubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      
+      // 2. Add a premium "flash" effect so the user knows which message it is
+      targetBubble.classList.add('ring-4', 'ring-[#007AFF]/40', 'transition-all', 'duration-300');
+      
+      // 3. Remove the flash after 1.5 seconds
+      setTimeout(() => {
+        targetBubble.classList.remove('ring-4', 'ring-[#007AFF]/40');
+      }, 1500);
+    } else {
+      toast('Message is too old to display.', { icon: '🕰️' });
+    }
+  };
+
   let isCallLog = message.type === 'call_log';
   let callData = message.callData || {};
 
@@ -57,7 +107,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
         callData = parsed;
       }
     } catch (e) {
-      // Not valid JSON, let it render as normal text
+      // Not valid JSON
     }
   }
 
@@ -98,11 +148,11 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     if (message.type === 'image') {
       return (
         <div className="relative inline-block w-full">
-          <img src={message.url} alt="attachment" onClick={() => setIsImageOpen(true)} className={`w-full max-w-[220px] sm:max-w-[300px] rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer object-cover border border-gray-100 shadow-sm`} />
+          <img src={message.url} alt="attachment" onClick={(e) => { e.stopPropagation(); setIsImageOpen(true); }} className={`w-full max-w-[220px] sm:max-w-[300px] rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer object-cover border border-gray-100 shadow-sm`} />
           <span className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-md text-white/90 text-[10px] px-1.5 py-0.5 rounded-full z-10 pointer-events-none tracking-wide">{formatTime(message.createdAt)}</span>
           {isImageOpen && (
             <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
-              <button onClick={() => setIsImageOpen(false)} className="absolute top-6 right-6 text-white text-3xl font-light hover:opacity-75 z-[110]">&times;</button>
+              <button onClick={(e) => { e.stopPropagation(); setIsImageOpen(false); }} className="absolute top-6 right-6 text-white text-3xl font-light hover:opacity-75 z-[110]">&times;</button>
               <img src={message.url} className="max-w-full max-h-[90vh] object-contain rounded-lg" alt="fullscreen" />
             </div>
           )}
@@ -113,12 +163,12 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     if (message.type === 'video') {
       return (
         <div className="relative inline-block w-full">
-          <div onClick={() => setIsVideoOpen(true)} className={`w-[220px] sm:w-[260px] h-[140px] sm:h-[160px] bg-gray-900 rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer flex items-center justify-center relative overflow-hidden shadow-sm`}>
+          <div onClick={(e) => { e.stopPropagation(); setIsVideoOpen(true); }} className={`w-[220px] sm:w-[260px] h-[140px] sm:h-[160px] bg-gray-900 rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer flex items-center justify-center relative overflow-hidden shadow-sm`}>
              <video src={message.url} className="absolute inset-0 w-full h-full object-cover opacity-60" />
              <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white/30 backdrop-blur-md rounded-full flex items-center justify-center z-10"><svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg></div>
           </div>
           <span className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-md text-white/90 text-[10px] px-1.5 py-0.5 rounded-full z-10 pointer-events-none tracking-wide">{formatTime(message.createdAt)}</span>
-          {isVideoOpen && <CustomVideoPlayer url={message.url} onClose={() => setIsVideoOpen(false)} />}
+          {isVideoOpen && <CustomVideoPlayer url={message.url} onClose={(e) => { e?.stopPropagation(); setIsVideoOpen(false); }} />}
         </div>
       );
     }
@@ -148,8 +198,12 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
 
     return (
       <div className="flex flex-col gap-1 w-full">
+        {/* 🔥 THE FIX: Attached Quote Click Handler & Cursor UI */}
         {repliedToMessage && (
-          <div className={`px-2.5 py-1.5 rounded-lg text-[12px] sm:text-[13px] mb-1 opacity-90 border-l-2 ${isMine ? 'bg-white/20 border-white text-white' : 'bg-gray-100 border-[#007AFF] text-gray-600'}`}>
+          <div 
+            onClick={(e) => handleQuoteClick(e, repliedToMessage._id || repliedToMessage.id)}
+            className={`px-2.5 py-1.5 rounded-lg text-[12px] sm:text-[13px] mb-1 opacity-90 border-l-2 cursor-pointer hover:opacity-100 active:scale-[0.98] transition-all ${isMine ? 'bg-white/20 border-white text-white' : 'bg-gray-100 border-[#007AFF] text-gray-600'}`}
+          >
             <div className="font-semibold text-[10px] sm:text-[11px] mb-0.5">
               {isMine && repliedToMessage.sender === message.sender ? 'You replied to yourself' : 'Replied'}
             </div>
@@ -186,10 +240,26 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
 
   return (
     <div className={`flex ${hasReactions ? 'mb-5' : 'mb-1.5 sm:mb-2'} w-full ${isMine ? 'justify-end' : 'justify-start'} ${showMenu ? 'relative z-50' : ''}`}>
-      <div className="max-w-[85%] sm:max-w-[70%] group flex flex-col relative">
-        
+      
+      <div 
+        ref={bubbleRef}
+        onTouchStart={handlePressStart}
+        onTouchEnd={handlePressEnd}
+        onTouchMove={handlePressEnd}
+        onMouseDown={handlePressStart}
+        onMouseUp={handlePressEnd}
+        onMouseLeave={handlePressEnd}
+        className="max-w-[85%] sm:max-w-[70%] group flex flex-col relative cursor-default select-none"
+      >
         <div className={`absolute top-1 sm:top-2 z-20 ${isMine ? '-left-8 sm:-left-10' : '-right-8 sm:-right-10'}`}>
-          <button onClick={() => setShowMenu(!showMenu)} className={`p-1 sm:p-1.5 text-gray-400 hover:text-gray-600 bg-white rounded-full shadow-sm border border-gray-200 transition-opacity ${showMenu ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-100'}`}>
+          
+          <button 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              setShowMenu(!showMenu); 
+            }} 
+            className={`p-1 sm:p-1.5 text-gray-400 hover:text-gray-600 bg-white rounded-full shadow-sm border border-gray-200 transition-opacity ${showMenu || isTouchActive ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-100'}`}
+          >
             <DotsIcon />
           </button>
 
@@ -199,7 +269,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
               
               <div className="flex justify-between items-center px-3 sm:px-4 py-3 sm:py-3.5 bg-white/50">
                 {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
-                  <button key={emoji} onClick={() => { onReact(emoji); setShowMenu(false); }} className="hover:scale-125 transition-transform text-[18px] sm:text-[22px] leading-none">
+                  <button key={emoji} onClick={(e) => { e.stopPropagation(); onReact(emoji); setShowMenu(false); setIsTouchActive(false); }} className="hover:scale-125 transition-transform text-[18px] sm:text-[22px] leading-none">
                     {emoji}
                   </button>
                 ))}
@@ -209,7 +279,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
                 <div className="flex flex-col bg-white/80">
                   <div className="h-[1px] bg-gray-200/80 w-full" />
                   
-                  <button onClick={() => { onReply(); setShowMenu(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
+                  <button onClick={(e) => { e.stopPropagation(); onReply(); setShowMenu(false); setIsTouchActive(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
                     <span>Reply</span>
                     <ReplyIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
@@ -217,7 +287,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
                   {!isCallLog && message.type === 'text' && (
                     <>
                       <div className="h-[1px] bg-gray-200/80 ml-4 sm:ml-5" />
-                      <button onClick={handleCopy} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
+                      <button onClick={(e) => { e.stopPropagation(); handleCopy(); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
                         <span>Copy</span>
                         <CopyIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
@@ -227,7 +297,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
                   {isMine && !isCallLog && message.type === 'text' && (
                     <>
                       <div className="h-[1px] bg-gray-200/80 ml-4 sm:ml-5" />
-                      <button onClick={() => { onEdit(message); setShowMenu(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
+                      <button onClick={(e) => { e.stopPropagation(); onEdit(message); setShowMenu(false); setIsTouchActive(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-gray-900 hover:bg-gray-100 transition active:bg-gray-200">
                         <span>Edit</span>
                         <EditPenIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
@@ -237,7 +307,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
                   {isMine && (
                     <>
                       <div className="h-[1px] bg-gray-200/80 ml-4 sm:ml-5" />
-                      <button onClick={() => { onDelete(); setShowMenu(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-[#ff3b30] hover:bg-gray-100 transition active:bg-gray-200">
+                      <button onClick={(e) => { e.stopPropagation(); onDelete(); setShowMenu(false); setIsTouchActive(false); }} className="flex justify-between items-center px-4 sm:px-5 py-3 sm:py-3.5 text-[15px] sm:text-[16px] text-[#ff3b30] hover:bg-gray-100 transition active:bg-gray-200">
                         <span>Delete</span>
                         <TrashIcon className="text-[#ff3b30] w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
@@ -249,8 +319,8 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
           )}
         </div>
 
-        {/* The Bubble */}
-        <div className={`relative ${bubbleStyle}`}>
+        {/* 🔥 THE FIX: Attached ID to the Bubble */}
+        <div id={`bubble-${message._id || message.id}`} className={`relative ${bubbleStyle}`}>
           {renderContent()}
 
           {/* Render Reactions on the Bubble */}
@@ -287,7 +357,8 @@ function CustomAudioPlayer({ url, isMine }) {
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
 
-  const togglePlay = () => {
+  const togglePlay = (e) => {
+    e.stopPropagation();
     if (audioRef.current.paused) {
       audioRef.current.play();
       setIsPlaying(true);
@@ -329,6 +400,7 @@ function CustomAudioPlayer({ url, isMine }) {
         <div 
           className="flex-1 relative flex items-center h-5 cursor-pointer"
           onClick={(e) => {
+            e.stopPropagation();
             if (!duration) return;
             const rect = e.currentTarget.getBoundingClientRect();
             const clickPos = (e.clientX - rect.left) / rect.width;
@@ -355,7 +427,8 @@ function CustomVideoPlayer({ url, onClose }) {
   const [speed, setSpeed] = useState(1);
   const [duration, setDuration] = useState(0);
 
-  const togglePlay = () => {
+  const togglePlay = (e) => {
+    e?.stopPropagation();
     if (videoRef.current.paused) {
       videoRef.current.play();
       setIsPlaying(true);
@@ -370,13 +443,15 @@ function CustomVideoPlayer({ url, onClose }) {
     setProgress(p);
   };
 
-  const changeSpeed = () => {
+  const changeSpeed = (e) => {
+    e.stopPropagation();
     const newSpeed = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1;
     videoRef.current.playbackRate = newSpeed;
     setSpeed(newSpeed);
   };
 
-  const handleDownload = () => {
+  const handleDownload = (e) => {
+    e.stopPropagation();
     const a = document.createElement('a');
     a.href = url;
     a.download = 'video.mp4';
@@ -384,7 +459,7 @@ function CustomVideoPlayer({ url, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-lg flex items-center justify-center p-2 sm:p-4">
+    <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-lg flex items-center justify-center p-2 sm:p-4" onClick={(e) => e.stopPropagation()}>
       <button onClick={onClose} className="absolute top-4 sm:top-6 right-4 sm:right-6 text-white text-3xl font-light hover:text-gray-300 z-[110]">&times;</button>
       <div className="relative w-full max-w-4xl flex flex-col items-center">
         <video 
@@ -397,7 +472,7 @@ function CustomVideoPlayer({ url, onClose }) {
             {isPlaying ? <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg> : <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>}
           </button>
           <span className="text-white text-[10px] sm:text-xs font-mono">{formatSec(videoRef.current?.currentTime)}</span>
-          <div className="flex-1 h-1.5 sm:h-1.5 bg-white/20 rounded-full overflow-hidden relative cursor-pointer" onClick={(e) => { const rect = e.currentTarget.getBoundingClientRect(); const clickPos = (e.clientX - rect.left) / rect.width; videoRef.current.currentTime = clickPos * duration; }}>
+          <div className="flex-1 h-1.5 sm:h-1.5 bg-white/20 rounded-full overflow-hidden relative cursor-pointer" onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); const clickPos = (e.clientX - rect.left) / rect.width; videoRef.current.currentTime = clickPos * duration; }}>
              <div className="h-full bg-[#007AFF]" style={{ width: `${progress}%` }} />
           </div>
           <span className="text-white text-[10px] sm:text-xs font-mono">{formatSec(duration)}</span>

@@ -9,16 +9,19 @@ export const useChatStore = create((set, get) => ({
   inbox: [], 
   activeContact: null,
   messages: {},
+
+  // 🔥 PAGINATION TRACKERS ADDED HERE
+  hasMore: {}, 
+  roomPages: {},
+
   typingUsers: {},
   requests: [],
   onlineUsers: [],
   unread: {}, 
-  
 
   setOnlineUsers: (users) => set({ onlineUsers: users }),
 
   setActiveContact: (contact) => {
-
     if (!contact) {
       set({ activeContact: null });
       return; 
@@ -62,18 +65,24 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  loadMessages: async (roomId) => {
+  // 🔥 UPDATED: Infinite Scroll Logic Injected Here
+  loadMessages: async (roomId, page = 1) => {
     try {
-      console.log(`📡 Fetching messages for room: ${roomId}`);
-      const res = await api.get(`/chat/${roomId}`);
+      console.log(`📡 Fetching messages for room: ${roomId}, page: ${page}`);
+      const res = await api.get(`/chat/${roomId}?page=${page}&limit=50`);
       console.log(`✅ Backend returned ${res.data.length} messages!`, res.data);
       
-      set(state => ({
-        messages: {
-          ...state.messages,
-          [roomId]: res.data
-        }
-      }));
+      set(state => {
+        const existingMessages = state.messages[roomId] || [];
+        // If page 1, replace. If older page, add to the TOP of the array.
+        const newMessages = page === 1 ? res.data : [...res.data, ...existingMessages];
+        
+        return { 
+          messages: { ...state.messages, [roomId]: newMessages },
+          hasMore: { ...state.hasMore, [roomId]: res.data.length === 50 },
+          roomPages: { ...state.roomPages, [roomId]: page }
+        };
+      });
     } catch (err) {
       console.error("❌ FAILED TO LOAD MESSAGES:", err.response?.data || err.message);
     }
@@ -117,7 +126,6 @@ export const useChatStore = create((set, get) => ({
     });
   },
 
-  // 🔥 NEW: Instantly update a message in the UI (for Edits and Reactions)
   updateMessage: (roomId, messageId, updates) => {
     set(state => {
       const roomMsgs = state.messages[roomId];
@@ -128,6 +136,35 @@ export const useChatStore = create((set, get) => ({
           ...state.messages,
           [roomId]: roomMsgs.map(m => (m._id || m.id) === messageId ? { ...m, ...updates } : m)
         }
+      };
+    });
+  },
+
+  // 🔥 FEATURE #12: Update reactions in both the active chat AND the sidebar preview
+  updateMessageReactions: (roomId, msgId, newReactions) => {
+    set(state => {
+      const roomMsgs = state.messages[roomId];
+      const updatedMessages = roomMsgs 
+        ? roomMsgs.map(m => (m._id || m.id) === msgId ? { ...m, reactions: newReactions } : m)
+        : [];
+
+      // Update the inbox preview if the reacted message is the very last message in the thread
+      const updatedInbox = (state.inbox || []).map(inboxItem => {
+        if (inboxItem.lastMessage && (inboxItem.lastMessage._id || inboxItem.lastMessage.id) === msgId) {
+          return {
+            ...inboxItem,
+            lastMessage: {
+              ...inboxItem.lastMessage,
+              reactions: newReactions
+            }
+          };
+        }
+        return inboxItem;
+      });
+
+      return {
+        messages: { ...state.messages, [roomId]: updatedMessages },
+        inbox: updatedInbox
       };
     });
   },
