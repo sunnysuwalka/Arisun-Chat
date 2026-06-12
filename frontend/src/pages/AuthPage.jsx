@@ -15,7 +15,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // 🔥 Verification States
+  // Verification States
   const [isVerifying, setIsVerifying] = useState(false);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [otpError, setOtpError] = useState('');
@@ -32,25 +32,116 @@ export default function AuthPage() {
     username: '',
     password: '',
     email: '', 
-    pin: '', // 🔥 New PIN State
+    pin: '', 
     avatar: null
   });
 
-  // 🔥 Forgot Password State
-  const [forgotEmail, setForgotEmail] = useState('');
+  // Real-time Inline Error States
+  const [usernameError, setUsernameError] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+
+  // 🔥 NEW: Forgot Password States
+  const [forgotUsername, setForgotUsername] = useState('');
+  const [isResetSent, setIsResetSent] = useState(false);
+  const [resetEmailTarget, setResetEmailTarget] = useState('your registered email');
 
   const [avatarPreview, setAvatarPreview] = useState(null);
 
   const navigate = useNavigate();
-  
   const { login, setUser, setToken, setPrivateKeys } = useAuthStore();
+
+  // 🔥 1. REAL-TIME USERNAME CHECK
+  useEffect(() => {
+    const u = regForm.username.trim();
+    if (u.length === 0) {
+      setUsernameError('');
+      return;
+    }
+    if (u.length < 3 || u.length > 20 || !/^[a-zA-Z0-9_]+$/.test(u)) {
+      setUsernameError('3-20 characters, alphanumeric & underscores only');
+      return;
+    }
+
+    setUsernameError(''); 
+    setIsCheckingUsername(true);
+
+    const checkDb = setTimeout(async () => {
+      if (tab !== 'register') return;
+      try {
+        const res = await api.post('/auth/check-availability', { username: u });
+        if (res.data.usernameTaken) {
+          setUsernameError('Username already exists');
+        }
+      } catch (err) {
+        console.error('Failed to verify username', err);
+      } finally {
+        setIsCheckingUsername(false);
+      }
+    }, 500); 
+
+    return () => clearTimeout(checkDb);
+  }, [regForm.username, tab]);
+
+  // 🔥 2. REAL-TIME STRICT EMAIL CHECK
+  useEffect(() => {
+    const e = regForm.email.trim();
+    if (e.length === 0) {
+      setEmailError('');
+      return;
+    }
+    
+    // Bulletproof regex: Stops "www.@mail.com" or ".@mail.com"
+    const emailRegex = /^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*@[a-zA-Z0-9]+([.-][a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(e)) {
+      setEmailError('Invalid email format');
+      return;
+    }
+
+    setEmailError('');
+
+    const checkDb = setTimeout(async () => {
+      if (tab !== 'register') return;
+      try {
+        const res = await api.post('/auth/check-availability', { email: e });
+        if (res.data.emailTaken) {
+          setEmailError('Email already registered');
+        }
+      } catch (err) {
+        console.error('Failed to verify email', err);
+      }
+    }, 500);
+
+    return () => clearTimeout(checkDb);
+  }, [regForm.email, tab]);
+
+  // 🔥 3. REAL-TIME PASSWORD CHECK
+  useEffect(() => {
+    const p = regForm.password;
+    if (p.length === 0) {
+      setPasswordError('');
+      return;
+    }
+    
+    let errs = [];
+    if (p.length < 6) errs.push('6+ chars');
+    if (!/[a-zA-Z]/.test(p)) errs.push('1 letter');
+    if (!/\d/.test(p)) errs.push('1 number');
+
+    if (errs.length > 0) {
+      setPasswordError(`Requires: ${errs.join(', ')}`);
+    } else {
+      setPasswordError('');
+    }
+  }, [regForm.password]);
 
   const passwordStrength = () => {
     const p = regForm.password;
     if (p.length === 0) return 0;
     if (p.length < 6) return 25;
     if (p.length < 8) return 50;
-    if (!/[A-Z]/.test(p) || !/\d/.test(p)) return 75;
+    if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) return 75;
     return 100;
   };
 
@@ -61,7 +152,7 @@ export default function AuthPage() {
     return 'bg-emerald-500';
   };
 
-  // ⏱️ Timer Logic
+  // Timer Logic
   useEffect(() => {
     let interval;
     if (isVerifying && timer > 0) {
@@ -77,23 +168,18 @@ export default function AuthPage() {
     setLoading(true);
 
     const result = await login(loginForm.username, loginForm.password);
-
     setLoading(false);
 
     if (result.success) {
-      // 🔥 E2EE LOGIN VAULT UNLOCK
       const userDoc = result.user;
       if (userDoc.primaryVault) {
         const decryptedKeys = await unlockVault(userDoc.primaryVault, loginForm.password);
         if (decryptedKeys) {
           setPrivateKeys(decryptedKeys);
-          toast.success('Vault unlocked successfully');
         } else {
           toast.error('Failed to unlock E2EE vault. Recovery needed.');
         }
       }
-
-      toast.success('Welcome back');
       navigate('/');
     } else {
       toast.error(result.error);
@@ -113,6 +199,11 @@ export default function AuthPage() {
 
   const handleRegister = async (e) => {
     e.preventDefault();
+
+    // Final Gatekeeper: Do not submit if any inline errors exist
+    if (usernameError || emailError || passwordError) {
+      return toast.error('Please fix the errors in the form before submitting');
+    }
 
     if (!regForm.username || !regForm.password || !regForm.email || !regForm.pin) {
       return toast.error('All fields are required');
@@ -134,13 +225,8 @@ export default function AuthPage() {
         avatarUrl = uploadRes.data.url;
       }
 
-      // 🔥 1. Generate E2EE Keys
       const keys = await generateE2EEKeys();
-
-      // 🔥 2. Lock the Primary Vault with the user's password
       const primaryVault = await lockVault(keys.privateKeys, regForm.password);
-
-      // 🔥 3. Lock the Server Escrow Vault with the 6-digit PIN
       const pinEscrow = await lockVault(keys.privateKeys, regForm.pin);
 
       const res = await api.post('/auth/register', {
@@ -148,10 +234,9 @@ export default function AuthPage() {
         password: regForm.password,
         email: regForm.email, 
         avatar: avatarUrl,
-        // 🔥 Send E2EE fields to backend
         publicKey: keys.publicKeys.encPublicKey,
         signPublicKey: keys.publicKeys.signPublicKey,
-        primaryVault: primaryVault.encryptedData || primaryVault, // Support old & new crypto utility response
+        primaryVault: primaryVault.encryptedData || primaryVault, 
         encryptedMasterKey: pinEscrow.encryptedData || pinEscrow, 
         pinSalt: pinEscrow.salt || 'embedded' 
       });
@@ -203,13 +288,11 @@ export default function AuthPage() {
         otp: otpCode 
       });
 
-      // 🔥 Unlock the vault right after verification
       if (res.data.user?.primaryVault) {
         const decryptedKeys = await unlockVault(res.data.user.primaryVault, regForm.password);
         if (decryptedKeys) setPrivateKeys(decryptedKeys);
       }
       
-      toast.success('Email verified successfully!');
       localStorage.setItem('token', res.data.token);
       setUser(res.data.user);
       setToken(res.data.token);
@@ -249,22 +332,31 @@ export default function AuthPage() {
     }
   };
 
+  // 🔥 REWRITTEN: Handles the new Username-based flow
   const handleForgotPassword = async (e) => {
     e.preventDefault();
-    if (!forgotEmail) return toast.error('Please enter your email');
+    if (!forgotUsername.trim()) return toast.error('Please enter your username');
 
     setLoading(true);
     try {
-      await api.post('/auth/forgot-password', { email: forgotEmail });
-      toast.success('Password reset link sent to your email!');
-      setTab('login');
-      setForgotEmail('');
+      const res = await api.post('/auth/forgot-password', { username: forgotUsername.trim() });
+      
+      // If backend passes back a masked email string (e.g. "j***@gmail.com"), use it. Otherwise use a fallback.
+      if (res.data.email) {
+        setResetEmailTarget(res.data.email);
+      }
+      
+      setIsResetSent(true);
+      toast.success('Reset link sent!');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to process request');
     } finally {
       setLoading(false);
     }
   };
+
+  const isFormValid = !usernameError && !emailError && !passwordError && 
+                      regForm.username && regForm.email && regForm.password && regForm.pin.length === 6;
 
   return (
     <div className="min-h-screen bg-[#F5F7FB] flex items-center justify-center p-4 sm:p-6 lg:p-8 relative overflow-hidden">
@@ -439,19 +531,28 @@ export default function AuthPage() {
                   </div>
 
                   <div>
-                    <input
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                      placeholder="Username"
-                      value={regForm.username}
-                      onChange={(e) => setRegForm(f => ({ ...f, username: e.target.value }))}
-                    />
-                    <p className="text-[10px] sm:text-xs text-gray-400 mt-1.5 ml-1">3–20 characters</p>
+                    <div className="relative">
+                      <input
+                        className={`w-full border rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 transition-all ${usernameError ? 'border-red-400 focus:ring-red-500/20 bg-red-50' : 'border-gray-200 focus:ring-blue-500 focus:bg-white bg-gray-50'}`}
+                        placeholder="Username"
+                        value={regForm.username}
+                        onChange={(e) => setRegForm(f => ({ ...f, username: e.target.value }))}
+                      />
+                      {isCheckingUsername && (
+                        <div className="absolute right-4 top-4 w-4 h-4 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+                      )}
+                    </div>
+                    {usernameError ? (
+                      <p className="text-[11px] font-bold text-red-500 mt-1 ml-1 animate-fade-in">{usernameError}</p>
+                    ) : (
+                      <p className="text-[10px] sm:text-xs text-gray-400 mt-1.5 ml-1">3–20 characters, alphanumeric & underscores</p>
+                    )}
                   </div>
 
                   <div>
                     <input
                       type="password"
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                      className={`w-full border rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 transition-all ${passwordError ? 'border-red-400 focus:ring-red-500/20 bg-red-50' : 'border-gray-200 focus:ring-blue-500 focus:bg-white bg-gray-50'}`}
                       placeholder="Password"
                       value={regForm.password}
                       onChange={(e) => setRegForm(f => ({ ...f, password: e.target.value }))}
@@ -463,21 +564,27 @@ export default function AuthPage() {
                         style={{ width: `${passwordStrength()}%` }}
                       />
                     </div>
-                    <div className="flex justify-between items-center mt-1.5 ml-1">
-                      <p className="text-[10px] sm:text-xs text-gray-400">Use at least 8 characters, 1 uppercase, 1 number</p>
-                    </div>
+                    {passwordError ? (
+                      <p className="text-[11px] font-bold text-red-500 mt-1.5 ml-1 animate-fade-in">{passwordError}</p>
+                    ) : (
+                      <p className="text-[10px] sm:text-xs text-gray-400 mt-1.5 ml-1">Include at least 1 letter and 1 number</p>
+                    )}
                   </div>
 
-                  <input
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                    placeholder="hello@example.com"
-                    type="email"
-                    required
-                    value={regForm.email}
-                    onChange={(e) => setRegForm(f => ({ ...f, email: e.target.value }))}
-                  />
+                  <div>
+                    <input
+                      className={`w-full border rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 transition-all ${emailError ? 'border-red-400 focus:ring-red-500/20 bg-red-50' : 'border-gray-200 focus:ring-blue-500 focus:bg-white bg-gray-50'}`}
+                      placeholder="hello@example.com"
+                      type="email"
+                      required
+                      value={regForm.email}
+                      onChange={(e) => setRegForm(f => ({ ...f, email: e.target.value }))}
+                    />
+                    {emailError && (
+                      <p className="text-[11px] font-bold text-red-500 mt-1 ml-1 animate-fade-in">{emailError}</p>
+                    )}
+                  </div>
 
-                  {/* 🔥 NEW: 6-Digit PIN Field */}
                   <div>
                     <input
                       type="text"
@@ -489,51 +596,80 @@ export default function AuthPage() {
                       onChange={(e) => setRegForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '') }))}
                     />
                     <p className="text-[10px] sm:text-xs text-gray-400 mt-1.5 ml-1 text-center">
-                      This PIN securely backs up your encrypted chats.
+                      In case you forget your password, this PIN will be required to get your chat history back.
                     </p>
                   </div>
 
                   <button
-                    disabled={loading}
-                    className="w-full py-3 mt-2 rounded-xl bg-blue-600 text-white font-medium text-sm sm:text-base hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100"
+                    disabled={loading || !isFormValid}
+                    className="w-full py-3 mt-2 rounded-xl bg-blue-600 text-white font-medium text-sm sm:text-base hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed"
                   >
                     {loading ? 'Creating account...' : 'Create Account'}
                   </button>
                 </form>
               )}
 
+              {/* 🔥 NEW UI: Forgot Password (Username Flow) */}
               {tab === 'forgot' && (
                 <div className="animate-fade-in flex flex-col items-center">
-                  <h2 className="text-2xl font-bold text-gray-900 tracking-tight text-center">Reset Password</h2>
-                  <p className="text-[14px] text-gray-500 text-center mt-2 mb-6">
-                    Enter your email address and we'll send you a link to reset your password.
-                  </p>
+                  
+                  {isResetSent ? (
+                    <div className="flex flex-col items-center text-center animate-fade-in">
+                      <div className="w-16 h-16 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center mb-4">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                      </div>
+                      <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Check Your Email</h2>
+                      <p className="text-[14px] text-gray-500 mt-2 mb-6 px-4">
+                        We have sent the reset link to <span className="font-semibold text-gray-900">{resetEmailTarget}</span> successfully.
+                      </p>
+                      <button 
+                        onClick={() => {
+                          setTab('login');
+                          setIsResetSent(false);
+                          setForgotUsername('');
+                        }}
+                        className="w-full py-3 rounded-xl bg-gray-100 text-gray-900 font-bold text-sm sm:text-base hover:bg-gray-200 transition-all active:scale-[0.98]"
+                      >
+                        Back to Login
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <h2 className="text-2xl font-bold text-gray-900 tracking-tight text-center">Reset Password</h2>
+                      <p className="text-[14px] text-gray-500 text-center mt-2 mb-6">
+                        Enter your username and we'll send a reset link to your registered email.
+                      </p>
 
-                  <form onSubmit={handleForgotPassword} className="w-full space-y-4">
-                    <input
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                      placeholder="hello@example.com"
-                      type="email"
-                      required
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
-                    />
+                      <form onSubmit={handleForgotPassword} className="w-full space-y-4">
+                        <input
+                          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm sm:text-base text-gray-900 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                          placeholder="Enter your username"
+                          type="text"
+                          required
+                          value={forgotUsername}
+                          onChange={(e) => setForgotUsername(e.target.value)}
+                        />
 
-                    <button
-                      disabled={loading}
-                      type="submit"
-                      className="w-full py-3 mt-2 rounded-xl bg-blue-600 text-white font-medium text-sm sm:text-base hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100"
-                    >
-                      {loading ? 'Sending Link...' : 'Send Reset Link'}
-                    </button>
-                  </form>
+                        <button
+                          disabled={loading}
+                          type="submit"
+                          className="w-full py-3 mt-2 rounded-xl bg-blue-600 text-white font-medium text-sm sm:text-base hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100"
+                        >
+                          {loading ? 'Sending Link...' : 'Reset Password'}
+                        </button>
+                      </form>
 
-                  <button 
-                    onClick={() => setTab('login')}
-                    className="mt-6 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors"
-                  >
-                    Back to Login
-                  </button>
+                      <button 
+                        onClick={() => {
+                          setTab('login');
+                          setForgotUsername('');
+                        }}
+                        className="mt-6 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors"
+                      >
+                        Back to Login
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </>

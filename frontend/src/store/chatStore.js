@@ -3,14 +3,16 @@ import api from '../utils/api';
 import { getSocket } from '../utils/socket';
 
 export const useChatStore = create((set, get) => ({
-  callState: null, // Track incoming/active calls
+  callState: null, 
   setCallState: (state) => set({ callState: state }),
   contacts: [],
   inbox: [], 
   activeContact: null,
   messages: {},
 
-  // 🔥 PAGINATION TRACKERS ADDED HERE
+  // 🔥 NEW: Hidden Chats State (Persists across reloads)
+  hiddenChats: JSON.parse(localStorage.getItem('hiddenChats')) || [],
+
   hasMore: {}, 
   roomPages: {},
 
@@ -21,17 +23,36 @@ export const useChatStore = create((set, get) => ({
 
   setOnlineUsers: (users) => set({ onlineUsers: users }),
 
+  // 🔥 NEW: Hide / Unhide Actions
+  hideChat: (contactId) => set(state => {
+    const updated = [...new Set([...state.hiddenChats, contactId])];
+    localStorage.setItem('hiddenChats', JSON.stringify(updated));
+    return { hiddenChats: updated };
+  }),
+
+  unhideChat: (contactId) => set(state => {
+    const updated = state.hiddenChats.filter(id => id !== contactId);
+    localStorage.setItem('hiddenChats', JSON.stringify(updated));
+    return { hiddenChats: updated };
+  }),
+
   setActiveContact: (contact) => {
     if (!contact) {
       set({ activeContact: null });
       return; 
     }
 
+    // 🔥 THE FIX: If they open a chat from the search bar, instantly unhide them
+    const contactId = contact._id || contact.id;
+    if (get().hiddenChats.includes(contactId)) {
+      get().unhideChat(contactId);
+    }
+
     set(state => ({
       activeContact: contact,
       unread: {
         ...state.unread,
-        [contact.id]: 0 
+        [contactId]: 0 
       }
     }));
   },
@@ -65,7 +86,6 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  // 🔥 UPDATED: Infinite Scroll Logic Injected Here
   loadMessages: async (roomId, page = 1) => {
     try {
       console.log(`📡 Fetching messages for room: ${roomId}, page: ${page}`);
@@ -74,7 +94,6 @@ export const useChatStore = create((set, get) => ({
       
       set(state => {
         const existingMessages = state.messages[roomId] || [];
-        // If page 1, replace. If older page, add to the TOP of the array.
         const newMessages = page === 1 ? res.data : [...res.data, ...existingMessages];
         
         return { 
@@ -92,18 +111,24 @@ export const useChatStore = create((set, get) => ({
     set((state) => {
       const currentMessages = state.messages[roomId] || [];
       
-      // 🔥 THE SHIELD: Check if this exact message is already in the array!
       const isDuplicate = currentMessages.some(
         (msg) => (msg._id || msg.id) === (newMessage._id || newMessage.id)
       );
 
-      // If we already have it, ignore the socket event and do nothing
       if (isDuplicate) {
         return state; 
       }
 
-      // Otherwise, add it safely to the bottom of the list
+      // 🔥 AUTO-UNHIDE: If a new message hits the room, ensure the chat reappears in the sidebar
+      let newHiddenChats = state.hiddenChats;
+      const [u1, u2] = roomId.split('_');
+      if (newHiddenChats.includes(u1) || newHiddenChats.includes(u2)) {
+        newHiddenChats = newHiddenChats.filter(id => id !== u1 && id !== u2);
+        localStorage.setItem('hiddenChats', JSON.stringify(newHiddenChats));
+      }
+
       return {
+        hiddenChats: newHiddenChats,
         messages: {
           ...state.messages,
           [roomId]: [...currentMessages, newMessage]
@@ -140,7 +165,6 @@ export const useChatStore = create((set, get) => ({
     });
   },
 
-  // 🔥 FEATURE #12: Update reactions in both the active chat AND the sidebar preview
   updateMessageReactions: (roomId, msgId, newReactions) => {
     set(state => {
       const roomMsgs = state.messages[roomId];
@@ -148,7 +172,6 @@ export const useChatStore = create((set, get) => ({
         ? roomMsgs.map(m => (m._id || m.id) === msgId ? { ...m, reactions: newReactions } : m)
         : [];
 
-      // Update the inbox preview if the reacted message is the very last message in the thread
       const updatedInbox = (state.inbox || []).map(inboxItem => {
         if (inboxItem.lastMessage && (inboxItem.lastMessage._id || inboxItem.lastMessage.id) === msgId) {
           return {

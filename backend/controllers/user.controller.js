@@ -1,6 +1,6 @@
 const User = require('../models/User');
 const Request = require('../models/Request');
-const bcrypt = require('bcryptjs'); // 🔥 Added for the password update function
+const bcrypt = require('bcryptjs');
 
 // 🔍 SEARCH
 exports.searchUsers = async (req, res) => {
@@ -98,14 +98,19 @@ exports.unblockUser = async (req, res) => {
   } catch { res.status(500).json({ error: 'Unblock failed' }); }
 };
 
-// ✏️ UPDATE PROFILE (Feature #10 - General Tab & Avatar)
+// ✏️ UPDATE PROFILE (Standard info without email change)
 exports.updateProfile = async (req, res) => {
   try {
-    const { username, mobile, avatar } = req.body;
+    // 🔥 Removed 'mobile' here. Email handles its own OTP flow below.
+    const { username, avatar } = req.body; 
     
+    const updateData = {};
+    if (username) updateData.username = username;
+    if (avatar) updateData.avatar = avatar;
+
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
-      { username, mobile, avatar },
+      updateData,
       { new: true } 
     ).select('-password'); 
 
@@ -116,7 +121,7 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-// 🔒 UPDATE PASSWORD (Feature #10 - Security Tab)
+// 🔒 UPDATE PASSWORD
 exports.updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -134,5 +139,89 @@ exports.updatePassword = async (req, res) => {
   } catch (err) {
     console.error("Password Update Error:", err);
     res.status(500).json({ error: "Failed to update password" });
+  }
+};
+
+// 🔥 NEW: REQUEST EMAIL CHANGE (Send OTP)
+exports.requestEmailChange = async (req, res) => {
+  try {
+    const { newEmail } = req.body;
+    const cleanEmail = newEmail.trim().toLowerCase();
+
+    // Ensure the new email isn't already taken by another user
+    const existing = await User.findOne({ email: cleanEmail });
+    if (existing) return res.status(400).json({ error: 'Email already in use' });
+
+    const user = await User.findById(req.user.id);
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otp = otp;
+    user.otpExpires = Date.now() + 15 * 60 * 1000; // 15 mins
+    await user.save();
+
+    // Fire off the Brevo native fetch
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { email: process.env.EMAIL_USER, name: "Arisun Chat" },
+        to: [{ email: cleanEmail }],
+        subject: "Arisun Chat — Verify Your New Email",
+        htmlContent: `
+          <div style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; color: #1C1C2E;">
+            <h2 style="color: #007AFF;">Email Update Request</h2>
+            <p>You requested to change your Arisun account email. Please use the verification code below:</p>
+            <div style="background-color: #F5F7FB; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
+              <h1 style="letter-spacing: 5px; margin: 0; color: #1C1C2E;">${otp}</h1>
+            </div>
+            <p style="font-size: 14px; color: #666;">This code will expire in 15 minutes.</p>
+            <p style="font-size: 14px; color: #666;">If you did not request this, please safely ignore this message.</p>
+          </div>
+        `
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("BREVO API ERROR:", errorData);
+      throw new Error("Failed to send OTP via Brevo");
+    }
+
+    res.json({ message: 'OTP sent to new email' });
+  } catch (err) {
+    console.error("Email Change Request Error:", err);
+    res.status(500).json({ error: 'Failed to request email change' });
+  }
+};
+
+// 🔥 NEW: VERIFY EMAIL CHANGE
+exports.verifyEmailChange = async (req, res) => {
+  try {
+    const { newEmail, otp, username } = req.body;
+    const cleanEmail = newEmail.trim().toLowerCase();
+
+    const user = await User.findById(req.user.id);
+    
+    if (!user.otp || user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP code.' });
+    if (user.otpExpires < Date.now()) return res.status(400).json({ error: 'OTP has expired. Please try again.' });
+
+    // Update the email (and optionally username if they changed both at once)
+    user.email = cleanEmail;
+    if (username) user.username = username;
+    
+    // Wipe the OTP fields
+    user.otp = undefined;
+    user.otpExpires = undefined;
+    
+    await user.save();
+
+    const updatedUser = await User.findById(req.user.id).select('-password');
+    res.status(200).json({ user: updatedUser });
+  } catch (err) {
+    console.error("Verify Email Change Error:", err);
+    res.status(500).json({ error: 'Verification failed' });
   }
 };

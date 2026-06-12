@@ -24,6 +24,7 @@ export default function ChatWindow({ contact }) {
   const [confirmAction, setConfirmAction] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null); 
+  const [requestSent, setRequestSent] = useState(false); // 🔥 For the new Add Friend button
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -38,7 +39,7 @@ export default function ChatWindow({ contact }) {
   const isScrolledUpRef = useRef(false);
   const chatContainerRef = useRef(null);
 
-  // 🔥 Pagination States
+  // Pagination States
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const previousScrollHeightRef = useRef(0);
 
@@ -47,10 +48,9 @@ export default function ChatWindow({ contact }) {
   const typingTimeoutRef = useRef(null);
   const menuRef = useRef(null);
 
-  // 🔥 Extracted hasMore and roomPages for Infinite Scroll
-  const { messages, loadMessages, typingUsers, loadContacts, loadInbox, removeMessage, updateMessage, setActiveContact, setCallState, hasMore, roomPages } = useChatStore();
+  // 🔥 Extracted `contacts` to enforce the UI Lock
+  const { messages, loadMessages, typingUsers, loadContacts, loadInbox, removeMessage, updateMessage, setActiveContact, setCallState, hasMore, roomPages, contacts } = useChatStore();
   
-  // 🔥 Extract privateKeys from auth store for memory-safe encryption/decryption
   const { user, privateKeys } = useAuthStore();
   const socket = getSocket();
 
@@ -61,25 +61,27 @@ export default function ChatWindow({ contact }) {
 
   const isOnline = useChatStore(s => s.onlineUsers.includes(contactId));
   const isTyping = (typingUsers[roomId] || []).includes(contactId);
+  
+  // 🔥 THE LOCK: Check if they are still friends
+  const isFriend = contacts?.some(c => (c._id || c.id) === contactId);
 
-  // Reset scroll state when changing chat rooms
   useEffect(() => {
     setIsScrolledUp(false);
     isScrolledUpRef.current = false;
     setUnreadCount(0);
   }, [roomId]);
 
-  // Stripped out the message:new listener entirely so it doesn't collide with ChatPage.jsx
   useEffect(() => {
     if (!contact || !myId) return;
     
     const joinRoom = () => socket.emit('room:join', roomId);
     
     joinRoom();
-    loadMessages(roomId, 1); // 🔥 Always load page 1 when opening a chat
+    loadMessages(roomId, 1); 
     setEditingMessage(null);
     setReplyingTo(null);
     setText('');
+    setRequestSent(false); // Reset request state on chat change
     cancelRecording();
 
     socket.on('connect', joinRoom);
@@ -89,21 +91,18 @@ export default function ChatWindow({ contact }) {
     };
   }, [contactId, roomId, myId, socket, loadMessages]);
 
-  // 🔥 THE NEW SCROLL HANDLER: Infinite Scroll + Unread Logic
   const handleScroll = async () => {
     if (!chatContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
     
-    // 1. Infinite Scroll Math: If we hit the absolute top
     if (scrollTop === 0 && hasMore[roomId] && !isLoadingOlder) {
       setIsLoadingOlder(true);
-      previousScrollHeightRef.current = scrollHeight; // Remember how tall the container was
+      previousScrollHeightRef.current = scrollHeight; 
       const nextPage = (roomPages[roomId] || 1) + 1;
       await loadMessages(roomId, nextPage);
       setIsLoadingOlder(false);
     }
 
-    // 2. Smart Scroll Math
     const isUp = scrollHeight - scrollTop - clientHeight > 150;
 
     if (isScrolledUpRef.current !== isUp) {
@@ -123,20 +122,17 @@ export default function ChatWindow({ contact }) {
     isScrolledUpRef.current = false;
   };
 
-  // 🔥 INTELLIGENT AUTO-SCROLL INTERCEPTOR
   const prevMsgCount = useRef(roomMessages.length);
 
   useEffect(() => {
-    // 1. Restore scroll position if we just fetched older messages
     if (previousScrollHeightRef.current > 0 && chatContainerRef.current) {
       const newScrollHeight = chatContainerRef.current.scrollHeight;
       chatContainerRef.current.scrollTop = newScrollHeight - previousScrollHeightRef.current;
-      previousScrollHeightRef.current = 0; // Reset
-      prevMsgCount.current = roomMessages.length; // Update count
-      return; // Exit early so it doesn't jump to bottom!
+      previousScrollHeightRef.current = 0; 
+      prevMsgCount.current = roomMessages.length; 
+      return; 
     }
 
-    // 2. Normal Auto-Scroll for New Messages
     const isNewMessage = roomMessages.length > prevMsgCount.current;
 
     if (isNewMessage) {
@@ -176,11 +172,22 @@ export default function ChatWindow({ contact }) {
     }, 2000);
   };
 
+  // 🔥 RESTORE CONNECTION: New Add Friend function for the locked state
+  const handleSendRequest = async () => {
+    try {
+      const res = await api.post('/users/request', { toUserId: contactId });
+      socket.emit('request:send', { ...res.data.request, toUserId: contactId });
+      setRequestSent(true);
+      toast.success('Friend request sent!');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to send request');
+    }
+  };
+
   const sendMessage = async (e) => {
     e?.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim() || !isFriend) return;
 
-    // 🔥 E2EE: Ensure vault is unlocked before sending text messages
     if (!privateKeys) {
       toast.error("Vault is locked! Please re-login to send messages.");
       return;
@@ -188,14 +195,13 @@ export default function ChatWindow({ contact }) {
 
     let encryptedText = text.trim();
 
-    // 🔥 ENCRYPT THE MESSAGE TEXT
     if (contact.publicKey && user.publicKey) {
       try {
         encryptedText = encryptMessage(
           encryptedText,
           privateKeys,
-          contact.publicKey, // Their Curve25519 public key
-          user.publicKey     // Our Curve25519 public key
+          contact.publicKey, 
+          user.publicKey 
         );
       } catch (err) {
         toast.error('Encryption Engine Failure');
@@ -235,7 +241,7 @@ export default function ChatWindow({ contact }) {
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file || !isFriend) return;
 
     setUploading(true);
     try {
@@ -261,6 +267,7 @@ export default function ChatWindow({ contact }) {
   };
 
   const startRecording = async () => {
+    if (!isFriend) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
@@ -302,7 +309,7 @@ export default function ChatWindow({ contact }) {
   };
 
   const sendRecording = () => {
-    if (!mediaRecorderRef.current) return;
+    if (!mediaRecorderRef.current || !isFriend) return;
     
     mediaRecorderRef.current.onstop = async () => {
       stopTracks();
@@ -357,17 +364,21 @@ export default function ChatWindow({ contact }) {
       } 
       else if (type === 'remove_friend') {
         await api.post('/users/remove', { userId: contactId });
+        
+        // 🔥 Real-time emit to lock User B's UI
+        socket.emit('friend:remove', { userId: contactId }); 
+        
         toast.success('Friend removed');
         loadContacts();
         loadInbox();
-        setActiveContact(null); 
+        // Notice we do NOT run `setActiveContact(null)` here anymore. The chat stays open but instantly locks!
       } 
       else if (type === 'block_user') {
         await api.post('/users/block', { userId: contactId });
+        socket.emit('friend:remove', { userId: contactId }); 
         toast.success('User blocked');
         loadContacts();
         loadInbox();
-        setActiveContact(null); 
       }
     } catch {
       toast.error(`Failed to execute action`);
@@ -376,11 +387,13 @@ export default function ChatWindow({ contact }) {
   };
 
   const triggerEdit = (msg) => {
+    if (!isFriend) return;
     setEditingMessage(msg);
-    setText(msg.text); // Since we pass the decrypted msg to the trigger, this correctly sets the unencrypted text in the input
+    setText(msg.text); 
   };
 
   const handleReact = async (msgId, emoji) => {
+    if (!isFriend) return;
     try {
       const res = await api.post('/chat/react', { messageId: msgId, emoji });
       updateMessage(roomId, msgId, { reactions: res.data.reactions });
@@ -389,23 +402,32 @@ export default function ChatWindow({ contact }) {
     }
   };
 
-  // 🔥 PROCESS MESSAGES BEFORE RENDERING (Decryption Engine)
+  // 🔥 THE FIX: Corrected cryptographic shared-secret mapping
   const decryptedMessages = roomMessages.map(msg => {
     let displayMsg = { ...msg };
     const isMine = displayMsg.sender === myId || displayMsg.senderId === myId;
     
-    if (displayMsg.type === 'text' && displayMsg.text && displayMsg.text.length > 50 && privateKeys) {
-      const senderEncPubKey = isMine ? user.publicKey : contact.publicKey;
-      const senderSignPubKey = isMine ? user.signPublicKey : contact.signPublicKey;
+    if (
+      displayMsg.type === 'text' && 
+      displayMsg.text && 
+      !displayMsg.text.startsWith('📞CALL_LOG::') && 
+      privateKeys
+    ) {
+      const targetEncPubKey = contact.publicKey; 
+      const targetSignPubKey = isMine ? user.signPublicKey : contact.signPublicKey;
       
-      if (senderEncPubKey && senderSignPubKey) {
-        displayMsg.text = decryptMessage(
-          displayMsg.text, 
-          privateKeys, 
-          senderEncPubKey, 
-          senderSignPubKey, 
-          isMine
-        );
+      if (targetEncPubKey && targetSignPubKey) {
+        try {
+          displayMsg.text = decryptMessage(
+            displayMsg.text, 
+            privateKeys, 
+            targetEncPubKey, 
+            targetSignPubKey, 
+            isMine
+          );
+        } catch (err) {
+          displayMsg.text = "🔒 [Decryption Error]";
+        }
       }
     }
     return displayMsg;
@@ -467,25 +489,30 @@ export default function ChatWindow({ contact }) {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-4">
-          <button 
-            onClick={(e) => {
-              e.preventDefault();
-              setCallState({ isInitiator: true, isReceivingCall: false, isCallAccepted: false, callType: 'audio', to: contactId });
-            }} 
-            className="text-[#007AFF] hover:opacity-70 transition p-1.5 sm:p-1"
-          >
-            <PhoneIcon />
-          </button>
-          
-          <button 
-            onClick={(e) => {
-              e.preventDefault();
-              setCallState({ isInitiator: true, isReceivingCall: false, isCallAccepted: false, callType: 'video', to: contactId });
-            }} 
-            className="text-[#007AFF] hover:opacity-70 transition p-1.5 sm:p-1"
-          >
-            <VideoIcon />
-          </button>
+          {/* 🔥 THE LOCK: Hide calls if not friends */}
+          {isFriend && (
+            <>
+              <button 
+                onClick={(e) => {
+                  e.preventDefault();
+                  setCallState({ isInitiator: true, isReceivingCall: false, isCallAccepted: false, callType: 'audio', to: contactId });
+                }} 
+                className="text-[#007AFF] hover:opacity-70 transition p-1.5 sm:p-1"
+              >
+                <PhoneIcon />
+              </button>
+              
+              <button 
+                onClick={(e) => {
+                  e.preventDefault();
+                  setCallState({ isInitiator: true, isReceivingCall: false, isCallAccepted: false, callType: 'video', to: contactId });
+                }} 
+                className="text-[#007AFF] hover:opacity-70 transition p-1.5 sm:p-1"
+              >
+                <VideoIcon />
+              </button>
+            </>
+          )}
           
           <div className="relative" ref={menuRef}>
             <button onClick={() => setIsMenuOpen(!isMenuOpen)} className={`p-1.5 sm:p-1 transition ${isMenuOpen ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
@@ -495,7 +522,9 @@ export default function ChatWindow({ contact }) {
             {isMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white/95 backdrop-blur-xl border border-gray-100 rounded-2xl shadow-xl py-2 z-50 overflow-hidden">
                 <button onClick={() => { setIsMenuOpen(false); setConfirmAction({ type: 'clear_chat', title: 'Clear Chat?', description: 'This will remove all messages for you.', confirmText: 'Clear', confirmColor: 'text-[#FF3B30]' }); }} className="w-full text-left px-4 py-2.5 text-[14px] sm:text-[15px] text-gray-700 hover:bg-gray-50 transition">Clear Chat</button>
-                <button onClick={() => { setIsMenuOpen(false); setConfirmAction({ type: 'remove_friend', title: 'Remove Friend?', description: `Remove ${contact.username} from friends?`, confirmText: 'Remove', confirmColor: 'text-[#FF3B30]' }); }} className="w-full text-left px-4 py-2.5 text-[14px] sm:text-[15px] text-[#FF3B30] hover:bg-red-50 transition">Remove Friend</button>
+                {isFriend && (
+                  <button onClick={() => { setIsMenuOpen(false); setConfirmAction({ type: 'remove_friend', title: 'Remove Friend?', description: `Remove ${contact.username} from friends?`, confirmText: 'Remove', confirmColor: 'text-[#FF3B30]' }); }} className="w-full text-left px-4 py-2.5 text-[14px] sm:text-[15px] text-[#FF3B30] hover:bg-red-50 transition">Remove Friend</button>
+                )}
                 <div className="h-[1px] bg-gray-100 my-1 mx-4" />
                 <button onClick={() => { setIsMenuOpen(false); setConfirmAction({ type: 'block_user', title: 'Block User?', description: `They will not be able to message you.`, confirmText: 'Block', confirmColor: 'text-[#FF3B30] font-bold' }); }} className="w-full text-left px-4 py-2.5 text-[14px] sm:text-[15px] font-medium text-[#FF3B30] hover:bg-red-50 transition">Block User</button>
               </div>
@@ -510,7 +539,6 @@ export default function ChatWindow({ contact }) {
         onScroll={handleScroll} 
         className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col"
       >
-        {/* 🔥 Loading Spinner for Older Messages */}
         {isLoadingOlder && (
           <div className="flex justify-center py-2 animate-fade-in">
             <div className="w-5 h-5 border-2 border-[#007AFF]/30 border-t-[#007AFF] rounded-full animate-spin" />
@@ -531,7 +559,7 @@ export default function ChatWindow({ contact }) {
           />
         ))}
 
-        {isTyping && (
+        {isTyping && isFriend && (
           <div className="flex mb-3 justify-start animate-fade-in">
             <div className="max-w-[85%] sm:max-w-[75%] flex flex-col relative">
               <div className="px-4 py-3 bg-white border border-gray-100 shadow-sm rounded-[20px] rounded-bl-sm flex gap-1.5 items-center h-[42px] w-[64px]">
@@ -562,87 +590,107 @@ export default function ChatWindow({ contact }) {
         </div>
       )}
 
-      {/* INPUT */}
+      {/* INPUT OR LOCK SCREEN */}
       <div className="p-3 sm:p-4 border-t bg-white flex flex-col z-20">
-        {editingMessage && (
-          <div className="flex justify-between items-center max-w-4xl mx-auto w-full mb-2 px-1 sm:px-2">
-            <span className="text-[12px] sm:text-[13px] font-medium text-[#007AFF] flex items-center gap-1.5">
-              <EditSmallIcon /> Editing Message
-            </span>
-            <button onClick={() => { setEditingMessage(null); setText(''); }} className="text-[12px] sm:text-[13px] text-gray-400 hover:text-gray-700 transition">Cancel</button>
-          </div>
-        )}
+        
+        {isFriend ? (
+          <>
+            {editingMessage && (
+              <div className="flex justify-between items-center max-w-4xl mx-auto w-full mb-2 px-1 sm:px-2">
+                <span className="text-[12px] sm:text-[13px] font-medium text-[#007AFF] flex items-center gap-1.5">
+                  <EditSmallIcon /> Editing Message
+                </span>
+                <button onClick={() => { setEditingMessage(null); setText(''); }} className="text-[12px] sm:text-[13px] text-gray-400 hover:text-gray-700 transition">Cancel</button>
+              </div>
+            )}
 
-        {replyingTo && (
-          <div className="flex justify-between items-center max-w-4xl mx-auto w-full mb-2 px-3 py-2 bg-gray-100 rounded-lg border-l-4 border-[#007AFF] animate-fade-in">
-            <div className="flex flex-col overflow-hidden mr-2">
-              <span className="text-[10px] sm:text-[11px] font-bold text-[#007AFF]">
-                Replying to {replyingTo.sender === myId || replyingTo.senderId === myId ? 'yourself' : contact.username}
-              </span>
-              <span className="text-[12px] sm:text-[13px] text-gray-600 truncate whitespace-nowrap">
-                {replyingTo.type === 'text' ? replyingTo.text : `[${replyingTo.type} attached]`}
-              </span>
-            </div>
-            <button type="button" onClick={() => setReplyingTo(null)} className="text-gray-400 hover:text-gray-700 p-1 flex-shrink-0">
-              <CloseIcon />
-            </button>
-          </div>
-        )}
+            {replyingTo && (
+              <div className="flex justify-between items-center max-w-4xl mx-auto w-full mb-2 px-3 py-2 bg-gray-100 rounded-lg border-l-4 border-[#007AFF] animate-fade-in">
+                <div className="flex flex-col overflow-hidden mr-2">
+                  <span className="text-[10px] sm:text-[11px] font-bold text-[#007AFF]">
+                    Replying to {replyingTo.sender === myId || replyingTo.senderId === myId ? 'yourself' : contact.username}
+                  </span>
+                  <span className="text-[12px] sm:text-[13px] text-gray-600 truncate whitespace-nowrap">
+                    {replyingTo.type === 'text' ? replyingTo.text : `[${replyingTo.type} attached]`}
+                  </span>
+                </div>
+                <button type="button" onClick={() => setReplyingTo(null)} className="text-gray-400 hover:text-gray-700 p-1 flex-shrink-0">
+                  <CloseIcon />
+                </button>
+              </div>
+            )}
 
-        <form onSubmit={sendMessage} className="flex gap-2 items-end max-w-4xl mx-auto w-full">
-          {!isRecording ? (
-            <>
-              {!editingMessage && (
+            <form onSubmit={sendMessage} className="flex gap-2 items-end max-w-4xl mx-auto w-full">
+              {!isRecording ? (
                 <>
-                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
-                  <button type="button" onClick={() => fileInputRef.current.click()} className="p-2 sm:p-2.5 text-gray-400 hover:text-[#007AFF] transition hover:bg-blue-50 rounded-full flex-shrink-0">
-                    <ClipIcon />
-                  </button>
+                  {!editingMessage && (
+                    <>
+                      <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+                      <button type="button" onClick={() => fileInputRef.current.click()} className="p-2 sm:p-2.5 text-gray-400 hover:text-[#007AFF] transition hover:bg-blue-50 rounded-full flex-shrink-0">
+                        <ClipIcon />
+                      </button>
+                    </>
+                  )}
+
+                  <input
+                    className="flex-1 bg-gray-100 text-gray-900 rounded-full px-4 sm:px-5 py-2.5 sm:py-3 text-[14px] sm:text-[15px] outline-none focus:bg-gray-200 transition"
+                    value={text}
+                    onChange={handleTextChange}
+                    placeholder={editingMessage ? "Edit message..." : "iMessage"}
+                  />
+
+                  {text.trim() || editingMessage ? (
+                    <button
+                      type="submit"
+                      disabled={uploading}
+                      className="w-10 h-10 sm:w-11 sm:h-11 bg-[#007AFF] text-white rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-50 disabled:bg-gray-300 transition"
+                    >
+                      {uploading ? <span className="animate-pulse text-sm">...</span> : (editingMessage ? <CheckIcon /> : <SendIcon />)}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={startRecording}
+                      className="w-10 h-10 sm:w-11 sm:h-11 bg-gray-100 text-[#007AFF] hover:bg-blue-50 rounded-full flex items-center justify-center flex-shrink-0 transition"
+                    >
+                      <MicIcon />
+                    </button>
+                  )}
                 </>
-              )}
-
-              <input
-                className="flex-1 bg-gray-100 text-gray-900 rounded-full px-4 sm:px-5 py-2.5 sm:py-3 text-[14px] sm:text-[15px] outline-none focus:bg-gray-200 transition"
-                value={text}
-                onChange={handleTextChange}
-                placeholder={editingMessage ? "Edit message..." : "iMessage"}
-              />
-
-              {text.trim() || editingMessage ? (
-                <button
-                  type="submit"
-                  disabled={uploading}
-                  className="w-10 h-10 sm:w-11 sm:h-11 bg-[#007AFF] text-white rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-50 disabled:bg-gray-300 transition"
-                >
-                  {uploading ? <span className="animate-pulse text-sm">...</span> : (editingMessage ? <CheckIcon /> : <SendIcon />)}
-                </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={startRecording}
-                  className="w-10 h-10 sm:w-11 sm:h-11 bg-gray-100 text-[#007AFF] hover:bg-blue-50 rounded-full flex items-center justify-center flex-shrink-0 transition"
-                >
-                  <MicIcon />
-                </button>
+                <div className="flex-1 bg-gray-100 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between w-full">
+                   <button type="button" onClick={cancelRecording} className="text-red-500 p-1.5 sm:p-2 hover:bg-red-50 rounded-full transition flex items-center gap-1 sm:gap-2 text-[12px] sm:text-sm font-medium">
+                     <TrashIcon /> <span className="hidden sm:inline">Cancel</span>
+                   </button>
+                   
+                   <div className="flex items-center gap-1.5 sm:gap-2">
+                      <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 bg-red-500 rounded-full animate-pulse" />
+                      <span className="font-mono text-[13px] sm:text-sm text-gray-700">{formatSec(recordingTime)}</span>
+                   </div>
+                   
+                   <button type="button" onClick={sendRecording} disabled={recordingTime < 1 || uploading} className="w-8 h-8 sm:w-9 sm:h-9 bg-[#007AFF] text-white rounded-full flex items-center justify-center disabled:opacity-50 transition">
+                      {uploading ? <span className="animate-pulse text-xs">...</span> : <SendIcon />}
+                   </button>
+                </div>
               )}
-            </>
-          ) : (
-            <div className="flex-1 bg-gray-100 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between w-full">
-               <button type="button" onClick={cancelRecording} className="text-red-500 p-1.5 sm:p-2 hover:bg-red-50 rounded-full transition flex items-center gap-1 sm:gap-2 text-[12px] sm:text-sm font-medium">
-                 <TrashIcon /> <span className="hidden sm:inline">Cancel</span>
-               </button>
-               
-               <div className="flex items-center gap-1.5 sm:gap-2">
-                  <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 bg-red-500 rounded-full animate-pulse" />
-                  <span className="font-mono text-[13px] sm:text-sm text-gray-700">{formatSec(recordingTime)}</span>
-               </div>
-               
-               <button type="button" onClick={sendRecording} disabled={recordingTime < 1 || uploading} className="w-8 h-8 sm:w-9 sm:h-9 bg-[#007AFF] text-white rounded-full flex items-center justify-center disabled:opacity-50 transition">
-                  {uploading ? <span className="animate-pulse text-xs">...</span> : <SendIcon />}
-               </button>
-            </div>
-          )}
-        </form>
+            </form>
+          </>
+        ) : (
+          // 🔥 THE LOCK: Restricted UI Box
+          <div className="flex flex-col items-center justify-center py-4 px-4 bg-gray-50 border border-gray-100 rounded-2xl animate-fade-in text-center mx-auto w-full max-w-2xl">
+             <p className="text-[13px] sm:text-[14px] text-gray-500 mb-3">
+               You are no longer connected with <span className="font-semibold text-gray-800">{contact.username}</span>. Send a friend request to resume chatting.
+             </p>
+             <button 
+               onClick={handleSendRequest}
+               disabled={requestSent}
+               className="px-5 py-2.5 bg-[#007AFF] text-white text-[13px] font-bold rounded-full hover:bg-blue-600 transition active:scale-95 shadow-sm disabled:opacity-50 disabled:bg-gray-400 disabled:active:scale-100"
+             >
+               {requestSent ? 'Request Sent' : 'Add Friend'}
+             </button>
+          </div>
+        )}
+
       </div>
     </div>
   );

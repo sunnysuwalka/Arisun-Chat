@@ -4,7 +4,8 @@ import api from '../utils/api';
 export const useAuthStore = create((set, get) => ({
   user: null,
   token: localStorage.getItem('token') || null,
-  privateKeys: null, // 🔥 The decrypted E2EE keys (Memory Only)
+  // 🔥 THE FIX: Moved to localStorage so the Vault stays unlocked even if the browser is closed
+  privateKeys: JSON.parse(localStorage.getItem('privateKeys')) || null, 
   loading: false,
   initialized: false,
 
@@ -13,10 +14,10 @@ export const useAuthStore = create((set, get) => ({
     if (!token) { set({ initialized: true }); return; }
     try {
       const res = await api.get('/auth/me');
-      // Note: We don't have the private keys here yet because we need the password to unlock them!
       set({ user: res.data, token, initialized: true });
     } catch {
       localStorage.removeItem('token');
+      localStorage.removeItem('privateKeys'); // Clean up on fail
       set({ user: null, token: null, privateKeys: null, initialized: true });
     }
   },
@@ -37,11 +38,16 @@ export const useAuthStore = create((set, get) => ({
 
   logout: () => {
     localStorage.removeItem('token');
-    // Wipe everything, especially the private keys
+    // 🔥 THE FIX: Destroy the persistent keys ONLY on manual logout
+    localStorage.removeItem('privateKeys'); 
     set({ user: null, token: null, privateKeys: null });
   },
 
   setUser: (user) => set({ user }),
   setToken: (token) => set({ token }),
-  setPrivateKeys: (keys) => set({ privateKeys: keys }) // 🔥 New Setter
+  setPrivateKeys: (keys) => {
+    // 🔥 THE FIX: Save to localStorage when unlocked during login/registration
+    localStorage.setItem('privateKeys', JSON.stringify(keys)); 
+    set({ privateKeys: keys });
+  }
 }));

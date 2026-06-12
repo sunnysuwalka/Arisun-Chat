@@ -18,7 +18,9 @@ export default function ChatPage() {
     markAsRead,
     addMessage,
     setTyping,
-    markMessagesAsSeen
+    markMessagesAsSeen,
+    contacts, // 🔥 Extracted here to ensure hydration
+    inbox     // 🔥 Extracted here to ensure hydration
   } = useChatStore();
 
   const { user, privateKeys } = useAuthStore();
@@ -93,22 +95,24 @@ export default function ChatPage() {
         }
       } else if (!isMine) {
         // User A is NOT looking at the chat where the message originated. Fire the Toast!
-        const contacts = state.contacts || [];
-        const inbox = state.inbox || [];
+        const latestContacts = state.contacts || contacts || [];
+        const latestInbox = state.inbox || inbox || [];
         
-        const senderObj = contacts.find(c => (c._id || c.id) === senderId) 
-                       || inbox.find(i => (i.user?._id || i.user?.id) === senderId)?.user;
+        const senderObj = latestContacts.find(c => (c._id || c.id) === senderId) 
+                       || latestInbox.find(i => (i.user?._id || i.user?.id) === senderId)?.user;
                        
         const senderName = senderObj?.username || 'New Message';
         
         let previewText = 'Sent a message';
         
         if (msg.type === 'text') {
-            // 🔥 Decrypt it for the Toast Preview if we have the keys!
-            if (msg.text && msg.text.length > 50 && privateKeys && senderObj?.publicKey) {
+            // 🔥 THE FIX: Decrypt it! We removed the length check so all messages decrypt
+            if (msg.text && privateKeys && senderObj?.publicKey) {
                 const decrypted = decryptMessage(msg.text, privateKeys, senderObj.publicKey, senderObj.signPublicKey, false);
-                previewText = decrypted.substring(0, 30) + (decrypted.length > 30 ? '...' : '');
+                // Clean up the text if it's too long for a toast
+                previewText = decrypted.substring(0, 40) + (decrypted.length > 40 ? '...' : '');
             } else {
+                // Failsafe if keys haven't loaded
                 previewText = 'Encrypted Message 🔒';
             }
         } else if (msg.type === 'image') {
@@ -159,7 +163,8 @@ export default function ChatPage() {
           </div>
         ), {
            id: `msg-${senderId}`, // Prevents spamming duplicate toasts from the same person
-           position: 'top-left', // Forced to top-left per your request
+           position: 'top-left', 
+           duration: 4000
         });
       }
     });
@@ -176,7 +181,7 @@ export default function ChatPage() {
       socket.off('message:new');
       socket.off('messages:read:receipt');
     };
-  }, [user, socket, setOnlineUsers, setTyping, addMessage, markMessagesAsSeen, markAsRead, privateKeys]);
+  }, [user, socket, setOnlineUsers, setTyping, addMessage, markMessagesAsSeen, markAsRead, privateKeys, contacts, inbox]);
 
   useEffect(() => {
     if (!activeContact || !user) return;
@@ -190,8 +195,6 @@ export default function ChatPage() {
 
   return (
     <div className="fixed inset-0 h-[100dvh] w-full flex overflow-hidden bg-[#F5F7FB]">
-      
-      {/* ⚠️ Toaster removed from here, since it is now safely inside App.js! */}
       
       <CallOverlay/>
 

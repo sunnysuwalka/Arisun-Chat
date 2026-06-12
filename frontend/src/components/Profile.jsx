@@ -4,19 +4,26 @@ import { useAuthStore } from '../store/authStore';
 import { useChatStore } from '../store/chatStore';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
+import { getSocket } from '../utils/socket';
 
 export default function Profile({ onClose }) {
   const { user, setAuthUser } = useAuthStore(); 
   const { contacts, loadContacts, loadInbox } = useChatStore();
+  const socket = getSocket();
   
   const [activeTab, setActiveTab] = useState('general');
   const [loading, setLoading] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [isEditingGeneral, setIsEditingGeneral] = useState(false);
 
-  // 🔥 THE FIX: Changed 'phone' to 'mobile' to match your database schema
+  // Custom Confirmation Modal State
+  const [confirmAction, setConfirmAction] = useState(null);
+
   const [username, setUsername] = useState(user?.username || '');
-  const [mobile, setMobile] = useState(user?.mobile || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
+  const [otp, setOtp] = useState('');
+
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   
@@ -26,7 +33,7 @@ export default function Profile({ onClose }) {
   useEffect(() => {
     if (user) {
       setUsername(user.username || '');
-      setMobile(user.mobile || '');
+      setEmail(user.email || '');
     }
   }, [user]);
 
@@ -57,7 +64,7 @@ export default function Profile({ onClose }) {
       setUploadingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  };
+  }
 
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
@@ -65,11 +72,16 @@ export default function Profile({ onClose }) {
 
     setLoading(true);
     try {
-      // 🔥 THE FIX: Sending 'mobile' to the backend
-      const res = await api.put('/users/profile', { username, mobile });
-      if (setAuthUser && res.data.user) setAuthUser(res.data.user);
-      toast.success('Profile updated successfully!');
-      setIsEditingGeneral(false);
+      if (email === user?.email) {
+        const res = await api.put('/users/profile', { username });
+        if (setAuthUser && res.data.user) setAuthUser(res.data.user);
+        toast.success('Profile updated successfully!');
+        setIsEditingGeneral(false);
+      } else {
+        await api.post('/users/request-email-change', { newEmail: email, username });
+        setVerifyingEmail(true);
+        toast.success('OTP sent to new email address!');
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to update profile');
     } finally {
@@ -77,10 +89,31 @@ export default function Profile({ onClose }) {
     }
   };
 
+  const handleVerifyEmailOTP = async (e) => {
+    e.preventDefault();
+    if (otp.length !== 6) return toast.error('OTP must be 6 digits');
+
+    setLoading(true);
+    try {
+      const res = await api.post('/users/verify-email-change', { newEmail: email, otp, username });
+      if (setAuthUser && res.data.user) setAuthUser(res.data.user);
+      toast.success('Email updated successfully!');
+      setVerifyingEmail(false);
+      setIsEditingGeneral(false);
+      setOtp('');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Invalid or expired OTP');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCancelEdit = () => {
     setUsername(user?.username || '');
-    setMobile(user?.mobile || '');
+    setEmail(user?.email || '');
     setIsEditingGeneral(false);
+    setVerifyingEmail(false);
+    setOtp('');
   };
 
   const handleUpdatePassword = async (e) => {
@@ -104,6 +137,7 @@ export default function Profile({ onClose }) {
   const handleRemoveFriend = async (friendId) => {
     try {
       await api.post('/users/remove', { userId: friendId });
+      socket.emit('friend:remove', { userId: friendId }); 
       toast.success('Friend removed');
       loadContacts();
       loadInbox();
@@ -115,6 +149,7 @@ export default function Profile({ onClose }) {
   const handleBlockUser = async (friendId) => {
     try {
       await api.post('/users/block', { userId: friendId });
+      socket.emit('friend:remove', { userId: friendId }); 
       toast.success('User blocked');
       loadContacts();
       loadInbox();
@@ -123,8 +158,47 @@ export default function Profile({ onClose }) {
     }
   };
 
+  const executeConfirmAction = async () => {
+    if (!confirmAction) return;
+    const { action, payload } = confirmAction;
+    await action(payload);
+    setConfirmAction(null);
+  };
+
   return (
     <div className="fixed inset-0 z-[200] bg-[#F5F7FB] flex flex-col animate-slide-up sm:animate-fade-in sm:items-center sm:justify-center sm:bg-black/40 sm:p-4">
+      
+      {/* CUSTOM CONFIRMATION MODAL */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-[#f2f2f2] rounded-[18px] w-full max-w-[270px] flex flex-col overflow-hidden text-center shadow-xl scale-in-center">
+            <div className="p-5 pb-4">
+              <h3 className="font-semibold text-[17px] tracking-tight text-black leading-tight">
+                {confirmAction.title}
+              </h3>
+              <p className="text-[13px] text-gray-500 mt-1 leading-tight">
+                {confirmAction.description}
+              </p>
+            </div>
+            <div className="flex border-t border-gray-300/80">
+              <button 
+                onClick={() => setConfirmAction(null)} 
+                className="flex-1 py-3 text-[17px] font-normal text-[#007AFF] hover:bg-gray-200/50 transition active:bg-gray-300/50"
+              >
+                Cancel
+              </button>
+              <div className="w-[1px] bg-gray-300/80" />
+              <button 
+                onClick={executeConfirmAction} 
+                className={`flex-1 py-3 text-[17px] font-normal hover:bg-gray-200/50 transition active:bg-gray-300/50 ${confirmAction.confirmColor}`}
+              >
+                {confirmAction.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col h-full w-full sm:max-w-[420px] sm:h-[650px] sm:max-h-[90vh] bg-[#F5F7FB] sm:rounded-[24px] sm:shadow-2xl overflow-hidden relative">
         
         {/* HEADER */}
@@ -167,7 +241,7 @@ export default function Profile({ onClose }) {
             />
 
             <h2 className="mt-3 text-[22px] font-bold text-gray-900">{user?.username}</h2>
-            <p className="text-[14px] text-gray-500">{user?.mobile}</p>
+            <p className="text-[14px] text-gray-500">{user?.email}</p>
           </div>
 
           {/* TABS */}
@@ -192,82 +266,117 @@ export default function Profile({ onClose }) {
             
             {/* GENERAL TAB */}
             {activeTab === 'general' && (
-              <form onSubmit={handleUpdateProfile} className="flex flex-col gap-4 animate-fade-in">
-                
-                <div className="flex justify-between items-center mb-[-4px]">
-                  <h3 className="text-[13px] font-bold text-gray-500 uppercase tracking-wider ml-1">Personal Info</h3>
-                  {!isEditingGeneral && (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingGeneral(true)}
-                      className="text-[13px] text-[#007AFF] font-bold flex items-center gap-1.5 hover:opacity-70 transition-opacity bg-blue-50 px-3 py-1 rounded-full"
-                    >
-                      <EditSmallIcon /> Edit
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <div className="relative">
-                    <div className={`absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors ${isEditingGeneral ? 'text-[#007AFF]' : 'text-gray-400'}`}>
-                      <UserIcon />
-                    </div>
+              <div className="animate-fade-in">
+                {verifyingEmail ? (
+                  <form onSubmit={handleVerifyEmailOTP} className="flex flex-col gap-4 bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
+                    <h3 className="text-sm font-bold text-blue-900 text-center">Verify New Email</h3>
+                    <p className="text-[12px] text-gray-500 text-center leading-tight">
+                      We sent a 6-digit code to <span className="font-semibold text-gray-900">{email}</span>
+                    </p>
                     <input 
                       type="text" 
-                      value={username} 
-                      onChange={(e) => setUsername(e.target.value)}
-                      readOnly={!isEditingGeneral}
-                      placeholder="Username"
-                      className={`w-full pl-12 pr-4 py-3.5 rounded-2xl text-[15px] font-medium transition-all outline-none ${
-                        isEditingGeneral 
-                          ? 'bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] shadow-sm' 
-                          : 'bg-transparent border border-transparent text-gray-700 cursor-default'
-                      }`}
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={otp} 
+                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Enter 6-digit OTP"
+                      className="w-full text-center tracking-[0.5em] font-mono py-3.5 rounded-2xl text-[18px] font-bold bg-white border border-gray-200 text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] transition-all shadow-sm"
                     />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <div className="relative">
-                    <div className={`absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors ${isEditingGeneral ? 'text-[#007AFF]' : 'text-gray-400'}`}>
-                      <PhoneIcon />
+                    <div className="flex gap-2 mt-1">
+                      <button 
+                        type="button" 
+                        onClick={handleCancelEdit}
+                        disabled={loading}
+                        className="flex-1 py-3 text-sm font-bold text-gray-600 bg-gray-200 rounded-xl hover:bg-gray-300 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        type="submit" 
+                        disabled={loading || otp.length !== 6}
+                        className="flex-[2] bg-[#007AFF] text-white text-sm font-bold py-3 rounded-xl hover:bg-blue-700 transition disabled:opacity-50"
+                      >
+                        {loading ? 'Verifying...' : 'Confirm'}
+                      </button>
                     </div>
-                    {/* 🔥 THE FIX: Bound the input to the 'mobile' state */}
-                    <input 
-                      type="tel" 
-                      value={mobile} 
-                      onChange={(e) => setMobile(e.target.value)}
-                      readOnly={!isEditingGeneral}
-                      placeholder={isEditingGeneral ? "Add mobile number" : "No mobile number added"}
-                      className={`w-full pl-12 pr-4 py-3.5 rounded-2xl text-[15px] font-medium transition-all outline-none ${
-                        isEditingGeneral 
-                          ? 'bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] shadow-sm' 
-                          : 'bg-transparent border border-transparent text-gray-700 cursor-default'
-                      }`}
-                    />
-                  </div>
-                </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleUpdateProfile} className="flex flex-col gap-4">
+                    <div className="flex justify-between items-center mb-[-4px]">
+                      <h3 className="text-[13px] font-bold text-gray-500 uppercase tracking-wider ml-1">Personal Info</h3>
+                      {!isEditingGeneral && (
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingGeneral(true)}
+                          className="text-[13px] text-[#007AFF] font-bold flex items-center gap-1.5 hover:opacity-70 transition-opacity bg-blue-50 px-3 py-1 rounded-full"
+                        >
+                          <EditSmallIcon /> Edit
+                        </button>
+                      )}
+                    </div>
 
-                {isEditingGeneral && (
-                  <div className="flex gap-3 mt-2 animate-fade-in">
-                    <button 
-                      type="button" 
-                      onClick={handleCancelEdit}
-                      disabled={loading}
-                      className="flex-1 py-3.5 bg-gray-200 text-gray-700 font-bold rounded-2xl hover:bg-gray-300 transition-all active:scale-[0.98] disabled:opacity-70"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit" 
-                      disabled={loading}
-                      className="flex-[2] bg-[#007AFF] text-white font-bold py-3.5 rounded-2xl shadow-[0_4px_14px_rgba(0,122,255,0.25)] hover:shadow-[0_6px_20px_rgba(0,122,255,0.3)] transition-all active:scale-[0.98] disabled:opacity-70"
-                    >
-                      {loading ? 'Saving...' : 'Save Changes'}
-                    </button>
-                  </div>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="relative">
+                        <div className={`absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors ${isEditingGeneral ? 'text-[#007AFF]' : 'text-gray-400'}`}>
+                          <UserIcon />
+                        </div>
+                        <input 
+                          type="text" 
+                          value={username} 
+                          onChange={(e) => setUsername(e.target.value)}
+                          readOnly={!isEditingGeneral}
+                          placeholder="Username"
+                          className={`w-full pl-12 pr-4 py-3.5 rounded-2xl text-[15px] font-medium transition-all outline-none ${
+                            isEditingGeneral 
+                              ? 'bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] shadow-sm' 
+                              : 'bg-transparent border border-transparent text-gray-700 cursor-default'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <div className="relative">
+                        <div className={`absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors ${isEditingGeneral ? 'text-[#007AFF]' : 'text-gray-400'}`}>
+                          <AtIcon />
+                        </div>
+                        <input 
+                          type="email" 
+                          value={email} 
+                          onChange={(e) => setEmail(e.target.value)}
+                          readOnly={!isEditingGeneral}
+                          placeholder={isEditingGeneral ? "Add email address" : "No email added"}
+                          className={`w-full pl-12 pr-4 py-3.5 rounded-2xl text-[15px] font-medium transition-all outline-none ${
+                            isEditingGeneral 
+                              ? 'bg-white border border-gray-200 text-gray-900 focus:ring-2 focus:ring-[#007AFF]/20 focus:border-[#007AFF] shadow-sm' 
+                              : 'bg-transparent border border-transparent text-gray-700 cursor-default'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {isEditingGeneral && (
+                      <div className="flex gap-3 mt-2 animate-fade-in">
+                        <button 
+                          type="button" 
+                          onClick={handleCancelEdit}
+                          disabled={loading}
+                          className="flex-1 py-3.5 bg-gray-200 text-gray-700 font-bold rounded-2xl hover:bg-gray-300 transition-all active:scale-[0.98] disabled:opacity-70"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          type="submit" 
+                          disabled={loading}
+                          className="flex-[2] bg-[#007AFF] text-white font-bold py-3.5 rounded-2xl shadow-[0_4px_14px_rgba(0,122,255,0.25)] hover:shadow-[0_6px_20px_rgba(0,122,255,0.3)] transition-all active:scale-[0.98] disabled:opacity-70"
+                        >
+                          {loading ? 'Saving...' : 'Save Changes'}
+                        </button>
+                      </div>
+                    )}
+                  </form>
                 )}
-              </form>
+              </div>
             )}
 
             {/* SECURITY TAB */}
@@ -335,9 +444,14 @@ export default function Profile({ onClose }) {
                       <div className="flex items-center gap-1.5">
                         <button 
                           onClick={() => {
-                            if (window.confirm(`Remove ${contact.username} from friends?`)) {
-                              handleRemoveFriend(contact._id || contact.id);
-                            }
+                            setConfirmAction({
+                              title: 'Remove Friend?',
+                              description: `Remove ${contact.username} from friends?`,
+                              confirmText: 'Remove',
+                              confirmColor: 'text-[#FF3B30]',
+                              action: () => handleRemoveFriend(contact._id || contact.id),
+                              payload: contact._id || contact.id
+                            });
                           }}
                           className="px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 text-[12px] font-bold rounded-full transition active:scale-95"
                         >
@@ -345,9 +459,14 @@ export default function Profile({ onClose }) {
                         </button>
                         <button 
                           onClick={() => {
-                            if (window.confirm(`Block ${contact.username}? They won't be able to message you.`)) {
-                              handleBlockUser(contact._id || contact.id);
-                            }
+                            setConfirmAction({
+                              title: 'Block User?',
+                              description: `Block ${contact.username}? They won't be able to message you.`,
+                              confirmText: 'Block',
+                              confirmColor: 'text-[#FF3B30] font-bold',
+                              action: () => handleBlockUser(contact._id || contact.id),
+                              payload: contact._id || contact.id
+                            });
                           }}
                           className="px-3 py-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 text-[12px] font-bold rounded-full transition active:scale-95"
                         >
@@ -370,7 +489,7 @@ export default function Profile({ onClose }) {
 // Icons
 const CloseIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>);
 const UserIcon = ({ className }) => (<svg className={className || "w-5 h-5"} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>);
-const PhoneIcon = () => (<svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>);
+const AtIcon = () => (<svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path></svg>);
 const LockIcon = () => (<svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>);
 const CameraIcon = ({ className }) => (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>);
 const EditSmallIcon = () => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>);

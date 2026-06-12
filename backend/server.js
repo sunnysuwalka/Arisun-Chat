@@ -102,6 +102,14 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 🔥 NEW: REAL-TIME UNFRIEND SYNC RELAY
+  socket.on('friend:remove', ({ userId }) => {
+    const targetSocket = onlineUsers[userId];
+    if (targetSocket) {
+      io.to(targetSocket).emit('friend:remove');
+    }
+  });
+
   // 🔥 NEW: Pass WebRTC firewall coordinates between browsers
   socket.on('call:ice-candidate', ({ toUserId, candidate }) => {
     const targetSocket = onlineUsers[toUserId];
@@ -142,7 +150,14 @@ io.on('connection', (socket) => {
         return;
       }
 
-      console.log("✅ 6. Passed all checks! Saving to DB...");
+      // 🔥 THE SERVER-SIDE BOUNCER: Must be friends to chat
+      if (!sender.friends.includes(receiver._id) || !receiver.friends.includes(sender._id)) {
+         console.log("❌ 6. REJECTED: Users are no longer friends.");
+         // Optionally, you could emit an error back to the sender here, but the UI lock handles the UX gracefully.
+         return;
+      }
+
+      console.log("✅ 7. Passed all checks! Saving to DB...");
 
       let inbox = await Inbox.findOne({ users: { $all: [user1, user2] } });
       if (!inbox) {
@@ -166,7 +181,7 @@ io.on('connection', (socket) => {
       inbox.unreadCount.set(receiverId, current + 1);
       await inbox.save();
 
-      console.log("🎉 7. Saved successfully! Emitting to room...");
+      console.log("🎉 8. Saved successfully! Emitting to room...");
       io.to(roomId).emit('message:new', msg);
 
       const targetSocket = onlineUsers[receiverId];
@@ -174,7 +189,6 @@ io.on('connection', (socket) => {
         // Update the receiver's sidebar
         io.to(targetSocket).emit('inbox:update');
 
-        // 🔥 THE FIX: Use your existing `targetSocket` and `msg` variables safely
         const receiverSocket = io.sockets.sockets.get(targetSocket);
         const isInRoom = receiverSocket && receiverSocket.rooms.has(roomId);
 
@@ -190,10 +204,17 @@ io.on('connection', (socket) => {
   });
 
   // 📞 WebRTC Signaling (Calling)
-  socket.on('call:initiate', ({ toUserId, signalData, fromUserId, callType }) => {
+  socket.on('call:initiate', async ({ toUserId, signalData, fromUserId, callType }) => {
     console.log("\n☎️ 1. BACKEND RECEIVED CALL REQUEST!");
     console.log(`   From: ${fromUserId} | To: ${toUserId} | Type: ${callType}`);
     
+    // 🔥 Prevent calls if not friends
+    const sender = await User.findById(fromUserId);
+    if (!sender || !sender.friends.includes(toUserId)) {
+        console.log("   ❌ REJECTED: Users are not friends.");
+        return;
+    }
+
     const targetSocket = onlineUsers[toUserId];
     console.log(`   Target Socket Found in Dictionary? : ${!!targetSocket}`);
 

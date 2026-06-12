@@ -16,7 +16,6 @@ const generateToken = (user) => {
 // -------------------------
 exports.register = async (req, res) => {
   try {
-    // 🔥 Extract the new PIN Escrow E2EE Vault fields
     const { username, email, password, avatar, publicKey, signPublicKey, primaryVault, encryptedMasterKey, pinSalt } = req.body;
 
     if (!email || !username) return res.status(400).json({ error: 'Username and Email required' });
@@ -42,7 +41,6 @@ exports.register = async (req, res) => {
         existingUser.otpExpires = otpExpires;
         if (avatar) existingUser.avatar = avatar; 
         
-        // Save the new vault architecture for ghost users
         if (publicKey) existingUser.publicKey = publicKey;
         if (signPublicKey) existingUser.signPublicKey = signPublicKey;
         if (primaryVault) existingUser.primaryVault = primaryVault;
@@ -68,7 +66,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 🔥 THE FIX: Brevo API via native fetch (bypassing Render SMTP block)
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -207,14 +204,19 @@ exports.getMe = async (req, res) => {
 };
 
 // -------------------------
-// 5. FORGOT PASSWORD
+// 5. FORGOT PASSWORD (USERNAME BASED)
 // -------------------------
 exports.forgotPassword = async (req, res) => {
   try {
-    const email = req.body.email?.trim().toLowerCase(); 
-    const user = await User.findOne({ email });
+    const username = req.body.username?.trim(); 
+    if (!username) return res.status(400).json({ error: 'Username is required.' });
 
-    if (!user) return res.status(404).json({ error: 'No account found with that email address.' });
+    // Look up the user by their username (case-insensitive for safety)
+    const user = await User.findOne({ 
+      username: { $regex: `^${username}$`, $options: 'i' } 
+    });
+
+    if (!user) return res.status(404).json({ error: 'No account found with that username.' });
 
     const resetToken = crypto.randomBytes(20).toString('hex');
     user.resetPasswordToken = resetToken;
@@ -224,7 +226,7 @@ exports.forgotPassword = async (req, res) => {
     const clientUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetUrl = `${clientUrl}/reset-password/${resetToken}`;
 
-    // 🔥 THE FIX: Brevo API via native fetch (bypassing Render SMTP block)
+    // Send to the email attached to their username account
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -257,7 +259,14 @@ exports.forgotPassword = async (req, res) => {
       throw new Error("Failed to send reset email via Brevo API");
     }
 
-    res.status(200).json({ message: 'Password reset link sent to your email.' });
+    // Mask the email so the frontend can securely display "j***@gmail.com"
+    const [namePart, domainPart] = user.email.split('@');
+    const maskedEmail = `${namePart.charAt(0)}***@${domainPart}`;
+
+    res.status(200).json({ 
+      message: 'Password reset link sent to your registered email.',
+      email: maskedEmail // Sent to frontend to populate the UI
+    });
 
   } catch (err) {
     console.error("Forgot Password Error:", err);
@@ -291,5 +300,37 @@ exports.resetPassword = async (req, res) => {
     res.status(200).json({ message: 'Password has been successfully reset.' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to reset password.' });
+  }
+};
+
+// -------------------------
+// 7. REAL-TIME AVAILABILITY CHECK
+// -------------------------
+exports.checkAvailability = async (req, res) => {
+  try {
+    const { username, email } = req.body;
+    let usernameTaken = false;
+    let emailTaken = false;
+
+    // Check Username (Case-Insensitive Exact Match using standard MongoDB syntax)
+    if (username) {
+      const existingUser = await User.findOne({ 
+        username: { $regex: `^${username.trim()}$`, $options: 'i' } 
+      });
+      if (existingUser) usernameTaken = true;
+    }
+
+    // Check Email (Case-Insensitive Exact Match)
+    if (email) {
+      const existingEmail = await User.findOne({ 
+        email: { $regex: `^${email.trim()}$`, $options: 'i' } 
+      });
+      if (existingEmail) emailTaken = true;
+    }
+
+    res.json({ usernameTaken, emailTaken });
+  } catch (err) {
+    console.error("Availability Check Error:", err);
+    res.status(500).json({ error: 'Failed to check availability' });
   }
 };

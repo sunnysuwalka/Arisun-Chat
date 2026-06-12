@@ -2,7 +2,8 @@ const router = require('express').Router();
 const auth = require('../middleware/auth');
 const {
   searchUsers, sendRequest, getRequests, handleRequest, getContacts,
-  blockUser, unblockUser, removeFriend, updateProfile, updatePassword
+  blockUser, unblockUser, removeFriend, updateProfile, updatePassword,
+  requestEmailChange, verifyEmailChange // 🔥 Added new controllers
 } = require('../controllers/user.controller');
 
 router.get('/search', auth, searchUsers);
@@ -14,8 +15,12 @@ router.post('/block', auth, blockUser);
 router.post('/remove', auth, removeFriend);
 router.post('/unblock', auth, unblockUser);
 
-// 🔥 ADDED PROFILE ENDPOINTS
+// Profile Endpoints
 router.put('/profile', auth, updateProfile);
 router.put('/password', auth, updatePassword);
+
+// 🔥 NEW: Email Change Endpoints
+router.post('/request-email-change', auth, requestEmailChange);
+router.post('/verify-email-change', auth, verifyEmailChange);
 
 module.exports = router;
