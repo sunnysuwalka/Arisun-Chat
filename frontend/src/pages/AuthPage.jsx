@@ -171,6 +171,21 @@ export default function AuthPage() {
     setLoading(false);
 
     if (result.success) {
+      // 🔥 THE RESCUE ROUTER: Slide into the OTP screen if unverified
+      if (result.requiresVerification) {
+        toast.success(result.message || "Welcome back! Let's verify your email.");
+        // Silently populate the register form so the OTP APIs and E2EE Vault unlock have all required data
+        setRegForm(f => ({ 
+          ...f, 
+          username: loginForm.username, 
+          email: result.email, 
+          password: loginForm.password 
+        }));
+        setIsVerifying(true);
+        setTimer(30);
+        return;
+      }
+
       const userDoc = result.user;
       if (userDoc.primaryVault) {
         const decryptedKeys = await unlockVault(userDoc.primaryVault, loginForm.password);
@@ -332,7 +347,7 @@ export default function AuthPage() {
     }
   };
 
-  // 🔥 REWRITTEN: Handles the new Username-based flow
+  // 🔥 Handles the new Username-based flow
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     if (!forgotUsername.trim()) return toast.error('Please enter your username');

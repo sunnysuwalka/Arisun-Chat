@@ -26,6 +26,18 @@ export const useAuthStore = create((set, get) => ({
     set({ loading: true });
     try {
       const res = await api.post('/auth/login', { username, password });
+      
+      // 🔥 THE RESCUE CATCH: Intercept the unverified response
+      if (res.data.requiresVerification) {
+        set({ loading: false });
+        return { 
+          success: true, 
+          requiresVerification: true, 
+          email: res.data.email, 
+          message: res.data.message 
+        };
+      }
+
       const { token, user } = res.data;
       localStorage.setItem('token', token);
       set({ token, user, loading: false });

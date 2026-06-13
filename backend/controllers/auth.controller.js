@@ -152,7 +152,7 @@ exports.verifyEmail = async (req, res) => {
 };
 
 // -------------------------
-// 3. LOGIN
+// 3. LOGIN (With Seamless Rescue)
 // -------------------------
 exports.login = async (req, res) => {
   try {
@@ -166,10 +166,48 @@ exports.login = async (req, res) => {
     });
 
     if (!user) return res.status(400).json({ error: 'User not found' });
-    if (!user.isVerified) return res.status(403).json({ error: 'Please verify your email before logging in.' });
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ error: 'Wrong password' });
+
+    if (!user.isVerified) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      user.otp = otp;
+      user.otpExpires = Date.now() + 15 * 60 * 1000; // 15 mins
+      await user.save();
+
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: { email: process.env.EMAIL_USER, name: "Arisun Chat" },
+          to: [{ email: user.email }],
+          subject: "Arisun Chat — Verify Your Account",
+          htmlContent: `
+            <div style="font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; color: #1C1C2E;">
+              <h2 style="color: #007AFF;">Welcome Back to Arisun!</h2>
+              <p>Let's finish setting up your account. Please verify your email with the code below:</p>
+              <div style="background-color: #F5F7FB; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                <h1 style="letter-spacing: 5px; margin: 0; color: #1C1C2E;">${otp}</h1>
+              </div>
+              <p style="font-size: 14px; color: #666;">This code will expire in 15 minutes.</p>
+            </div>
+          `
+        })
+      });
+
+      if (!response.ok) throw new Error("Failed to send OTP email via Brevo API");
+
+      return res.status(200).json({ 
+        requiresVerification: true, 
+        email: user.email,
+        message: "Welcome back! Let's verify your email."
+      });
+    }
 
     res.json({
       token: generateToken(user),
@@ -186,7 +224,8 @@ exports.login = async (req, res) => {
       }
     });
 
-  } catch {
+  } catch (err) {
+    console.error("Login Error:", err);
     res.status(500).json({ error: 'Login failed' });
   }
 };
