@@ -3,8 +3,12 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import AuthPage from './pages/AuthPage';
 import ChatPage from './pages/ChatPage';
-import ResetPasswordPage from './pages/ResetPasswordPage'; // 🔥 New Import
+import ResetPasswordPage from './pages/ResetPasswordPage'; 
 import { useAuthStore } from './store/authStore';
+import { useCallListener } from './hooks/useCallListener';
+
+// 🔥 IMPORT THE CALL OVERLAY
+import CallOverlay from './components/CallOverlay';
 
 function ProtectedRoute({ children }) {
   const { token } = useAuthStore();
@@ -19,6 +23,7 @@ function GuestRoute({ children }) {
 }
 
 export default function App() {
+  useCallListener();
   const { init, initialized } = useAuthStore();
   
   useEffect(() => { init(); }, []);
@@ -38,7 +43,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      {/* 🔥 THE FIX: Position updated to top-left to avoid collisions and match your spec */}
+      {/* 🔥 THE FIX: ENGINE MOUNTED. It stays hidden until callState is active */}
+      <CallOverlay />
+
       <Toaster position="top-left" toastOptions={{
         style: { background: '#1C1C2E', color: '#e8e8f0', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', fontSize: '14px', fontFamily: "'Plus Jakarta Sans', sans-serif" },
         success: { iconTheme: { primary: '#00E5A0', secondary: '#1C1C2E' } },
@@ -46,10 +53,7 @@ export default function App() {
       }} />
       <Routes>
         <Route path="/auth" element={<GuestRoute><AuthPage /></GuestRoute>} />
-        
-        {/* 🔥 NEW: Reset Password Route */}
         <Route path="/reset-password/:token" element={<GuestRoute><ResetPasswordPage /></GuestRoute>} />
-        
         <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

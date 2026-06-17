@@ -1,20 +1,23 @@
 const User = require('../models/User');
-const Request = require('../models/Request');
+const Notification = require('../models/Notification'); 
 const bcrypt = require('bcryptjs');
 
-// 🔍 SEARCH
+// 🔍 SEARCH (Plausible Deniability)
 exports.searchUsers = async (req, res) => {
   try {
     const q = req.query.q || '';
+    const myId = req.user.id;
+
     const users = await User.find({
       username: { $regex: q, $options: 'i' },
-      _id: { $ne: req.user.id }
+      _id: { $ne: myId }
     }).select('-password');
+
     res.json(users);
   } catch { res.status(500).json({ error: 'Search failed' }); }
 };
 
-// 🤝 SEND REQUEST
+// 🤝 SEND REQUEST (The Black Hole Implementation)
 exports.sendRequest = async (req, res) => {
   try {
     const { toUserId } = req.body;
@@ -22,39 +25,66 @@ exports.sendRequest = async (req, res) => {
     if (toUserId === fromUserId) return res.status(400).json({ error: 'Invalid' });
 
     const target = await User.findById(toUserId);
-    if (target.blockedUsers.includes(fromUserId)) return res.status(403).json({ error: 'Blocked' });
+    const sender = await User.findById(fromUserId); 
 
-    const exists = await Request.findOne({ from: fromUserId, to: toUserId, status: 'pending' });
+    const isBlockedByTarget = target.blockedUsers.some(id => id.toString() === fromUserId.toString());
+    if (isBlockedByTarget) {
+      return res.json({ 
+        request: {
+          _id: 'ghost_' + Date.now(),
+          sender: fromUserId,
+          recipient: toUserId,
+          senderUsername: sender.username,
+          senderAvatar: sender.avatar,
+          type: 'FRIEND_REQUEST',
+          status: 'pending'
+        }
+      });
+    }
+
+    const isTargetBlockedByMe = sender.blockedUsers.some(id => id.toString() === toUserId.toString());
+    if (isTargetBlockedByMe) {
+      return res.status(403).json({ error: 'You must unblock this user to send a request.' });
+    }
+
+    const exists = await Notification.findOne({ sender: fromUserId, recipient: toUserId, status: 'pending' });
     if (exists) return res.status(400).json({ error: 'Already sent' });
 
-    const request = await Request.create({ from: fromUserId, to: toUserId });
+    const request = await Notification.create({
+      sender: fromUserId,
+      recipient: toUserId,
+      senderUsername: sender.username,
+      senderAvatar: sender.avatar,
+      type: 'FRIEND_REQUEST'
+    });
+    
     res.json({ request });
-  } catch { res.status(500).json({ error: 'Failed' }); }
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: 'Failed' }); 
+  }
 };
 
-// 📥 GET REQUESTS
+// 📥 GET REQUESTS 
 exports.getRequests = async (req, res) => {
   try {
-    const requests = await Request.find({ to: req.user.id, status: 'pending' }).populate('from', 'username avatar');
+    const requests = await Notification.find({ recipient: req.user.id, status: 'pending' });
     res.json(requests);
   } catch { res.status(500).json({ error: 'Failed' }); }
 };
 
-// ✅ ACCEPT / ❌ DECLINE
+// ✅ ACCEPT / ❌ DECLINE 
 exports.handleRequest = async (req, res) => {
   try {
     const { action } = req.body;
-    const request = await Request.findById(req.params.id);
-    if (!request) return res.status(404).json({ error: 'Not found' });
+    const targetUserId = req.params.id; 
+    const myId = req.user.id;
 
     if (action === 'accept') {
-      request.status = 'accepted';
-      await User.findByIdAndUpdate(request.from, { $addToSet: { friends: request.to } });
-      await User.findByIdAndUpdate(request.to, { $addToSet: { friends: request.from } });
-    } else {
-      request.status = 'declined';
+      await User.findByIdAndUpdate(myId, { $addToSet: { friends: targetUserId } });
+      await User.findByIdAndUpdate(targetUserId, { $addToSet: { friends: myId } });
     }
-    await request.save();
+    
     res.json({ success: true });
   } catch { res.status(500).json({ error: 'Failed' }); }
 };
@@ -67,13 +97,26 @@ exports.getContacts = async (req, res) => {
   } catch { res.status(500).json({ error: 'Failed' }); }
 };
 
-// 🚫 BLOCK USER
+// 🚫 BLOCK USER 
 exports.blockUser = async (req, res) => {
   try {
     const { userId } = req.body;
     const myId = req.user.id;
-    await User.findByIdAndUpdate(myId, { $addToSet: { blockedUsers: userId }, $pull: { friends: userId } });
+    
+    await User.findByIdAndUpdate(myId, { 
+      $addToSet: { blockedUsers: userId }, 
+      $pull: { friends: userId } 
+    });
+    
     await User.findByIdAndUpdate(userId, { $pull: { friends: myId } });
+
+    await Notification.deleteMany({
+      $or: [
+        { sender: myId, recipient: userId },
+        { sender: userId, recipient: myId }
+      ]
+    });
+
     res.json({ message: 'User blocked' });
   } catch { res.status(500).json({ error: 'Block failed' }); }
 };
@@ -89,7 +132,7 @@ exports.removeFriend = async (req, res) => {
   } catch { res.status(500).json({ error: 'Remove failed' }); }
 };
 
-// 🔓 UNBLOCK
+// 🔓 UNBLOCK 
 exports.unblockUser = async (req, res) => {
   try {
     const { userId } = req.body;
@@ -98,25 +141,25 @@ exports.unblockUser = async (req, res) => {
   } catch { res.status(500).json({ error: 'Unblock failed' }); }
 };
 
-// ✏️ UPDATE PROFILE (Standard info without email change)
+// 📋 GET BLOCKED USERS
+exports.getBlockedUsers = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate('blockedUsers', 'username avatar');
+    res.json(user.blockedUsers);
+  } catch { res.status(500).json({ error: 'Failed to fetch blocked users' }); }
+};
+
+// ✏️ UPDATE PROFILE 
 exports.updateProfile = async (req, res) => {
   try {
-    // 🔥 Removed 'mobile' here. Email handles its own OTP flow below.
     const { username, avatar } = req.body; 
-    
     const updateData = {};
     if (username) updateData.username = username;
     if (avatar) updateData.avatar = avatar;
 
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      updateData,
-      { new: true } 
-    ).select('-password'); 
-
+    const updatedUser = await User.findByIdAndUpdate(req.user.id, updateData, { new: true }).select('-password'); 
     res.status(200).json({ user: updatedUser });
   } catch (err) {
-    console.error("Profile Update Error:", err);
     res.status(500).json({ error: "Failed to update profile" });
   }
 };
@@ -128,37 +171,31 @@ exports.updatePassword = async (req, res) => {
     const user = await User.findById(req.user.id);
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ error: 'Incorrect current password' });
-    }
+    if (!isMatch) return res.status(400).json({ error: 'Incorrect current password' });
 
     user.password = await bcrypt.hash(newPassword, 10);
     await user.save();
-
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err) {
-    console.error("Password Update Error:", err);
     res.status(500).json({ error: "Failed to update password" });
   }
 };
 
-// 🔥 NEW: REQUEST EMAIL CHANGE (Send OTP)
+// 🔥 REQUEST EMAIL CHANGE (Send OTP)
 exports.requestEmailChange = async (req, res) => {
   try {
     const { newEmail } = req.body;
     const cleanEmail = newEmail.trim().toLowerCase();
 
-    // Ensure the new email isn't already taken by another user
     const existing = await User.findOne({ email: cleanEmail });
     if (existing) return res.status(400).json({ error: 'Email already in use' });
 
     const user = await User.findById(req.user.id);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.otp = otp;
-    user.otpExpires = Date.now() + 15 * 60 * 1000; // 15 mins
+    user.otpExpires = Date.now() + 15 * 60 * 1000; 
     await user.save();
 
-    // Fire off the Brevo native fetch
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -178,26 +215,19 @@ exports.requestEmailChange = async (req, res) => {
               <h1 style="letter-spacing: 5px; margin: 0; color: #1C1C2E;">${otp}</h1>
             </div>
             <p style="font-size: 14px; color: #666;">This code will expire in 15 minutes.</p>
-            <p style="font-size: 14px; color: #666;">If you did not request this, please safely ignore this message.</p>
           </div>
         `
       })
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error("BREVO API ERROR:", errorData);
-      throw new Error("Failed to send OTP via Brevo");
-    }
-
+    if (!response.ok) throw new Error("Failed to send OTP via Brevo");
     res.json({ message: 'OTP sent to new email' });
   } catch (err) {
-    console.error("Email Change Request Error:", err);
     res.status(500).json({ error: 'Failed to request email change' });
   }
 };
 
-// 🔥 NEW: VERIFY EMAIL CHANGE
+// 🔥 VERIFY EMAIL CHANGE
 exports.verifyEmailChange = async (req, res) => {
   try {
     const { newEmail, otp, username } = req.body;
@@ -208,11 +238,9 @@ exports.verifyEmailChange = async (req, res) => {
     if (!user.otp || user.otp !== otp) return res.status(400).json({ error: 'Invalid OTP code.' });
     if (user.otpExpires < Date.now()) return res.status(400).json({ error: 'OTP has expired. Please try again.' });
 
-    // Update the email (and optionally username if they changed both at once)
     user.email = cleanEmail;
     if (username) user.username = username;
     
-    // Wipe the OTP fields
     user.otp = undefined;
     user.otpExpires = undefined;
     
@@ -221,7 +249,6 @@ exports.verifyEmailChange = async (req, res) => {
     const updatedUser = await User.findById(req.user.id).select('-password');
     res.status(200).json({ user: updatedUser });
   } catch (err) {
-    console.error("Verify Email Change Error:", err);
     res.status(500).json({ error: 'Verification failed' });
   }
 };

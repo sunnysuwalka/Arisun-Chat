@@ -9,6 +9,7 @@ const connectDB = require('./config/db');
 const Inbox = require('./models/Inbox');
 const Message = require('./models/Message');
 const User = require('./models/User');
+const Chat = require('./models/Chat'); 
 
 const app = express();
 const server = http.createServer(app);
@@ -27,7 +28,6 @@ app.use(cors({
   credentials: true 
 }));
 
-// Parse incoming JSON (Only one of these needed!)
 app.use(express.json());
 
 // 🕵️ GLOBAL NETWORK LOGGER: See every request that hits the backend
@@ -41,6 +41,9 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/chat', require('./routes/chat.routes'));
 app.use('/api/upload', require('./routes/upload.routes'));
+app.use('/api/notifications', require('./routes/notification.routes'));
+app.use('/api/call', require('./routes/call.routes'));
+app.use('/api/groups', require('./routes/group.routes'));
 
 // 🔥 WebSockets Setup with VIP CORS list
 const io = new Server(server, {
@@ -54,23 +57,17 @@ const io = new Server(server, {
 const onlineUsers = {};
 
 io.on('connection', (socket) => {
-  // ✅ Handle Online Status
   socket.on('user:online', (userId) => {
-
-    // Add this line so the user can receive personal background notifications
     socket.join(userId);
-
     onlineUsers[userId] = socket.id;
     io.emit('users:online', Object.keys(onlineUsers));
   });
 
-  // ✅ Join Room
   socket.on('room:join', (roomId) => {
     if (!roomId) return;
     socket.join(roomId);
   });
 
-  // 🔥 Handle Typing Indicators
   socket.on('typing:start', ({ roomId, userId }) => {
     socket.to(roomId).emit('typing:start', { roomId, userId });
   });
@@ -79,7 +76,6 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('typing:stop', { roomId, userId });
   });
 
-  // 🔥 Handle Read Receipts
   socket.on('messages:read', ({ byUserId, forUserId }) => {
     const targetSocket = onlineUsers[forUserId];
     if (targetSocket) {
@@ -87,11 +83,88 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ✅ Handle Friend Requests
-  socket.on('request:send', (data) => {
+  // 📞 CALL SIGNALING
+  socket.on('call:initiate', async (data) => {
+    if (data.isGroup && data.groupId) {
+      try {
+        const chat = await Chat.findById(data.groupId);
+        if (chat) {
+          chat.users.forEach(userId => {
+            if (userId.toString() === data.fromUserId) return; 
+            const targetSocket = onlineUsers[userId.toString()];
+            if (targetSocket) io.to(targetSocket).emit('call:incoming', data);
+          });
+        }
+      } catch (err) { console.error("Call group error", err); }
+    } else if (data.toUserId) {
+      const targetSocket = onlineUsers[data.toUserId];
+      if (targetSocket) io.to(targetSocket).emit('call:incoming', data);
+    }
+  });
+
+  socket.on('call:accept', async (data) => {
+    if (data.isGroup && data.groupId) {
+      try {
+        const chat = await Chat.findById(data.groupId);
+        if (chat) {
+          chat.users.forEach(userId => {
+            if (userId.toString() === data.fromUserId) return; 
+            const targetSocket = onlineUsers[userId.toString()];
+            if (targetSocket) io.to(targetSocket).emit('call:accepted', data);
+          });
+        }
+      } catch (err) {}
+    } else if (data.toUserId) {
+      const targetSocket = onlineUsers[data.toUserId];
+      if (targetSocket) io.to(targetSocket).emit('call:accepted', data);
+    }
+  });
+
+  socket.on('call:reject', async (data) => {
+    if (data.isGroup && data.groupId) {
+      try {
+        const chat = await Chat.findById(data.groupId);
+        if (chat) {
+          chat.users.forEach(userId => {
+            if (userId.toString() === data.fromUserId) return; 
+            const targetSocket = onlineUsers[userId.toString()];
+            if (targetSocket) io.to(targetSocket).emit('call:rejected', data);
+          });
+        }
+      } catch (err) {}
+    } else if (data.toUserId) {
+      const targetSocket = onlineUsers[data.toUserId];
+      if (targetSocket) io.to(targetSocket).emit('call:rejected', data);
+    }
+  });
+
+  socket.on('call:end', async (data) => {
+    if (data.isGroup && data.groupId) {
+      try {
+        const chat = await Chat.findById(data.groupId);
+        if (chat) {
+          chat.users.forEach(userId => {
+            if (userId.toString() === data.fromUserId) return; 
+            const targetSocket = onlineUsers[userId.toString()];
+            if (targetSocket) io.to(targetSocket).emit('call:ended', data);
+          });
+        }
+      } catch (err) {}
+    } else if (data.toUserId) {
+      const targetSocket = onlineUsers[data.toUserId];
+      if (targetSocket) io.to(targetSocket).emit('call:ended', data);
+    }
+  });
+
+  socket.on('request:send', async (data) => {
     const targetSocket = onlineUsers[data.toUserId];
     if (targetSocket) {
-      io.to(targetSocket).emit('request:received', data);
+      const receiver = await User.findById(data.toUserId);
+      const isBlocked = receiver?.blockedUsers?.some(id => id.toString() === data.sender.toString());
+      
+      if (!isBlocked) {
+        io.to(targetSocket).emit('request:received', data);
+      }
     }
   });
 
@@ -102,7 +175,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 🔥 NEW: REAL-TIME UNFRIEND SYNC RELAY
   socket.on('friend:remove', ({ userId }) => {
     const targetSocket = onlineUsers[userId];
     if (targetSocket) {
@@ -110,54 +182,72 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 🔥 NEW: Pass WebRTC firewall coordinates between browsers
-  socket.on('call:ice-candidate', ({ toUserId, candidate }) => {
-    const targetSocket = onlineUsers[toUserId];
-    if (targetSocket) {
-      io.to(targetSocket).emit('call:ice-candidate', candidate);
-    }
-  });
-
-  socket.on("call:toggle-video", (data) => {
-    io.to(data.toUserId).emit("call:toggle-video", data);
-  });
-
-  // ✅ Handle Sending Messages
+  // 🔥 UNIVERSAL MESSAGE ROUTER
   socket.on('message:send', async (data) => {
     console.log("\n📨 1. RECEIVED EVENT FROM FRONTEND:", data); 
 
     try {
       const { roomId, message } = data;
-      
-      if (!roomId || !roomId.includes('_')) {
-        console.log("❌ 2. REJECTED: Invalid roomId", roomId);
-        return;
-      }
-
-      const [user1, user2] = roomId.split('_');
-      console.log(`🔍 3. Looking up users in DB - Sender ID sent by React: ${message.sender}`);
+      if (!roomId) return;
 
       const sender = await User.findById(message.sender);
+      if (!sender) return;
+
+      // ---------------------------------------------------------
+      // 🚀 PATH A: GROUP CHAT ROUTING (Ultra-Secure Edition)
+      // ---------------------------------------------------------
+      if (!roomId.includes('_')) {
+        const chat = await Chat.findById(roomId);
+        
+        if (!chat || !chat.isGroupChat) return;
+
+        // Security Check 1: Is the sender an active member?
+        if (!chat.users.includes(sender._id)) {
+           console.log("❌ REJECTED: Sender not in active group list. Message dropped.");
+           return;
+        }
+
+        const msg = await Message.create({
+          ...message,
+          roomId,
+          replyTo: message.replyTo || null
+        });
+
+        chat.latestMessage = msg._id;
+        await chat.save();
+
+        // 🔥 THE FIX: Stop broadcasting to rooms! Individually send to verified active users.
+        // This guarantees removed users NEVER receive messages.
+        chat.users.forEach(userId => {
+           const targetSocket = onlineUsers[userId.toString()];
+           if (targetSocket) {
+              io.to(targetSocket).emit('message:new', msg);
+              io.to(targetSocket).emit('inbox:update');
+           }
+        });
+        return; 
+      }
+
+      // ---------------------------------------------------------
+      // 🔒 PATH B: 1-TO-1 CHAT ROUTING
+      // ---------------------------------------------------------
+      const [user1, user2] = roomId.split('_');
       const receiver = await User.findById(message.sender.toString() === user1 ? user2 : user1);
 
-      if (!sender || !receiver) {
-        console.log("❌ 4. REJECTED: Sender or Receiver not found in DB! Sender:", !!sender, "Receiver:", !!receiver);
-        return;
+      if (!receiver) return;
+
+      const senderBlockedReceiver = sender.blockedUsers?.some(id => id.toString() === receiver._id.toString());
+      const receiverBlockedSender = receiver.blockedUsers?.some(id => id.toString() === sender._id.toString());
+
+      if (senderBlockedReceiver || receiverBlockedSender) {
+        console.log("❌ REJECTED: Message dropped by Invisible Shield.");
+        return; 
       }
 
-      if (sender.blockedUsers?.includes(receiver._id) || receiver.blockedUsers?.includes(sender._id)) {
-        console.log("❌ 5. REJECTED: Someone is blocked.");
-        return;
-      }
-
-      // 🔥 THE SERVER-SIDE BOUNCER: Must be friends to chat
       if (!sender.friends.includes(receiver._id) || !receiver.friends.includes(sender._id)) {
-         console.log("❌ 6. REJECTED: Users are no longer friends.");
-         // Optionally, you could emit an error back to the sender here, but the UI lock handles the UX gracefully.
+         console.log("❌ REJECTED: Users are no longer friends.");
          return;
       }
-
-      console.log("✅ 7. Passed all checks! Saving to DB...");
 
       let inbox = await Inbox.findOne({ users: { $all: [user1, user2] } });
       if (!inbox) {
@@ -181,75 +271,22 @@ io.on('connection', (socket) => {
       inbox.unreadCount.set(receiverId, current + 1);
       await inbox.save();
 
-      console.log("🎉 8. Saved successfully! Emitting to room...");
       io.to(roomId).emit('message:new', msg);
 
       const targetSocket = onlineUsers[receiverId];
       if (targetSocket) {
-        // Update the receiver's sidebar
         io.to(targetSocket).emit('inbox:update');
-
         const receiverSocket = io.sockets.sockets.get(targetSocket);
         const isInRoom = receiverSocket && receiverSocket.rooms.has(roomId);
-
-        // If User A is NOT actively in the room with User C, emit directly to their socket
         if (!isInRoom) {
           io.to(targetSocket).emit('message:new', msg);
         }
       }
-
     } catch (err) {
       console.error('❌ MESSAGE CATCH ERROR:', err);
     }
   });
 
-  // 📞 WebRTC Signaling (Calling)
-  socket.on('call:initiate', async ({ toUserId, signalData, fromUserId, callType }) => {
-    console.log("\n☎️ 1. BACKEND RECEIVED CALL REQUEST!");
-    console.log(`   From: ${fromUserId} | To: ${toUserId} | Type: ${callType}`);
-    
-    // 🔥 Prevent calls if not friends
-    const sender = await User.findById(fromUserId);
-    if (!sender || !sender.friends.includes(toUserId)) {
-        console.log("   ❌ REJECTED: Users are not friends.");
-        return;
-    }
-
-    const targetSocket = onlineUsers[toUserId];
-    console.log(`   Target Socket Found in Dictionary? : ${!!targetSocket}`);
-
-    if (targetSocket) {
-      io.to(targetSocket).emit('call:incoming', { signalData, fromUserId, callType });
-      console.log("   ✅ 2. Forwarded 'call:incoming' to User B!");
-    } else {
-      console.log("   ❌ ERROR: User B is not online or socket ID is missing!");
-    }
-  });
-
-  socket.on('call:accept', ({ toUserId, signalData }) => {
-    const targetSocket = onlineUsers[toUserId];
-    if (targetSocket) {
-      io.to(targetSocket).emit('call:accepted', signalData);
-    }
-  });
-
-  socket.on('call:reject', (data) => {
-    console.log(`🛑 BACKEND: Rejecting call to ${data.toUserId} because: ${data.reason}`);
-    
-    const targetSocket = onlineUsers[data.toUserId];
-    if (targetSocket) {
-      io.to(targetSocket).emit('call:rejected', data);
-    }
-  });
-
-  socket.on('call:end', ({ toUserId }) => {
-    const targetSocket = onlineUsers[toUserId];
-    if (targetSocket) {
-      io.to(targetSocket).emit('call:ended');
-    }
-  });
-
-  // ✅ Handle Disconnects
   socket.on('disconnect', () => {
     const userId = Object.keys(onlineUsers).find(id => onlineUsers[id] === socket.id);
     if (userId) {
@@ -259,9 +296,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// Paste this at the absolute bottom of your backend server.js file:
-
-const mongoose = require('mongoose'); // Just in case it's not globally available at the bottom
+const mongoose = require('mongoose'); 
 
 mongoose.connection.once('open', async () => {
   try {
@@ -270,11 +305,8 @@ mongoose.connection.once('open', async () => {
     
     if (collections.length > 0) {
       await db.collection('users').dropIndex('mobile_1');
-      console.log('🔥 BRUTE FORCE SUCCESS: Stale "mobile_1" index has been destroyed!');
     }
-  } catch (err) {
-    console.log('ℹ️ Index note:', err.message);
-  }
+  } catch (err) {}
 });
 
 const PORT = process.env.PORT || 5000;

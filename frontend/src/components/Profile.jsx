@@ -8,7 +8,8 @@ import { getSocket } from '../utils/socket';
 
 export default function Profile({ onClose }) {
   const { user, setAuthUser } = useAuthStore(); 
-  const { contacts, loadContacts, loadInbox } = useChatStore();
+  // 🔥 Brought in blockedUsers and loadBlockedUsers from the store
+  const { contacts, loadContacts, loadInbox, blockedUsers, loadBlockedUsers } = useChatStore();
   const socket = getSocket();
   
   const [activeTab, setActiveTab] = useState('general');
@@ -16,7 +17,6 @@ export default function Profile({ onClose }) {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [isEditingGeneral, setIsEditingGeneral] = useState(false);
 
-  // Custom Confirmation Modal State
   const [confirmAction, setConfirmAction] = useState(null);
 
   const [username, setUsername] = useState(user?.username || '');
@@ -29,7 +29,6 @@ export default function Profile({ onClose }) {
   
   const fileInputRef = useRef(null);
 
-  // Sync state if user data updates in the background
   useEffect(() => {
     if (user) {
       setUsername(user.username || '');
@@ -37,11 +36,13 @@ export default function Profile({ onClose }) {
     }
   }, [user]);
 
+  // 🔥 Load both connections when the tab opens
   useEffect(() => {
-    if (activeTab === 'friends' && contacts.length === 0) {
-      loadContacts();
+    if (activeTab === 'friends') {
+      if (contacts.length === 0) loadContacts();
+      loadBlockedUsers();
     }
-  }, [activeTab, contacts.length, loadContacts]);
+  }, [activeTab, contacts.length, loadContacts, loadBlockedUsers]);
 
   const handleAvatarUpload = async (e) => {
     const file = e.target.files[0];
@@ -153,8 +154,20 @@ export default function Profile({ onClose }) {
       toast.success('User blocked');
       loadContacts();
       loadInbox();
+      loadBlockedUsers(); // 🔥 Refresh block list instantly
     } catch {
       toast.error('Failed to block user');
+    }
+  };
+
+  // 🔥 NEW: The Unblock Function
+  const handleUnblockUser = async (blockedId) => {
+    try {
+      await api.post('/users/unblock', { userId: blockedId });
+      toast.success('User unblocked');
+      loadBlockedUsers(); // 🔥 Refresh instantly
+    } catch {
+      toast.error('Failed to unblock user');
     }
   };
 
@@ -427,55 +440,100 @@ export default function Profile({ onClose }) {
             {/* FRIENDS TAB */}
             {activeTab === 'friends' && (
               <div className="flex flex-col gap-3 animate-fade-in">
-                {contacts.length === 0 ? (
+                
+                {/* ACTIVE CONNECTIONS */}
+                {contacts.length > 0 && (
+                  <div className="mb-2">
+                    <h3 className="text-[12px] font-bold text-gray-500 uppercase tracking-wider ml-1 mb-3">Active Friends</h3>
+                    <div className="flex flex-col gap-2">
+                      {contacts.map(contact => (
+                        <div key={contact._id || contact.id} className="flex items-center justify-between bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm">
+                          <div className="flex items-center gap-3">
+                            <Avatar user={contact} size={42} />
+                            <span className="font-semibold text-gray-900 text-[15px]">{contact.username}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button 
+                              onClick={() => {
+                                setConfirmAction({
+                                  title: 'Remove Friend?',
+                                  description: `Remove ${contact.username} from friends?`,
+                                  confirmText: 'Remove',
+                                  confirmColor: 'text-[#FF3B30]',
+                                  action: () => handleRemoveFriend(contact._id || contact.id),
+                                  payload: contact._id || contact.id
+                                });
+                              }}
+                              className="px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 text-[12px] font-bold rounded-full transition active:scale-95"
+                            >
+                              Remove
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setConfirmAction({
+                                  title: 'Block User?',
+                                  description: `Block ${contact.username}? They won't be able to message you.`,
+                                  confirmText: 'Block',
+                                  confirmColor: 'text-[#FF3B30] font-bold',
+                                  action: () => handleBlockUser(contact._id || contact.id),
+                                  payload: contact._id || contact.id
+                                });
+                              }}
+                              className="px-3 py-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 text-[12px] font-bold rounded-full transition active:scale-95"
+                            >
+                              Block
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* BLOCKED USERS */}
+                {blockedUsers?.length > 0 && (
+                  <div className="mt-2">
+                    <h3 className="text-[12px] font-bold text-gray-500 uppercase tracking-wider ml-1 mb-3">Blocked Users</h3>
+                    <div className="flex flex-col gap-2">
+                      {blockedUsers.map(blockedUser => (
+                        <div key={blockedUser._id || blockedUser.id} className="flex items-center justify-between bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm opacity-80 hover:opacity-100 transition">
+                          <div className="flex items-center gap-3">
+                            <div className="grayscale opacity-70">
+                              <Avatar user={blockedUser} size={42} />
+                            </div>
+                            <span className="font-medium text-gray-600 line-through decoration-gray-300 text-[15px]">{blockedUser.username}</span>
+                          </div>
+                          <button 
+                            onClick={() => {
+                              setConfirmAction({
+                                title: 'Unblock User?',
+                                description: `Allow ${blockedUser.username} to send you messages and friend requests?`,
+                                confirmText: 'Unblock',
+                                confirmColor: 'text-[#007AFF] font-bold',
+                                action: () => handleUnblockUser(blockedUser._id || blockedUser.id),
+                                payload: blockedUser._id || blockedUser.id
+                              });
+                            }}
+                            className="px-4 py-1.5 bg-blue-50 text-[#007AFF] hover:bg-blue-100 text-[12px] font-bold rounded-full transition active:scale-95"
+                          >
+                            Unblock
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* EMPTY STATE */}
+                {contacts.length === 0 && blockedUsers?.length === 0 && (
                   <div className="text-center py-10 bg-white rounded-2xl border border-gray-100">
                     <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
                       <UserIcon className="text-gray-400" />
                     </div>
-                    <p className="text-gray-500 text-[14px]">You don't have any friends yet.</p>
+                    <p className="text-gray-500 text-[14px]">You don't have any friends or blocked users.</p>
                   </div>
-                ) : (
-                  contacts.map(contact => (
-                    <div key={contact._id || contact.id} className="flex items-center justify-between bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm">
-                      <div className="flex items-center gap-3">
-                        <Avatar user={contact} size={42} />
-                        <span className="font-semibold text-gray-900 text-[15px]">{contact.username}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <button 
-                          onClick={() => {
-                            setConfirmAction({
-                              title: 'Remove Friend?',
-                              description: `Remove ${contact.username} from friends?`,
-                              confirmText: 'Remove',
-                              confirmColor: 'text-[#FF3B30]',
-                              action: () => handleRemoveFriend(contact._id || contact.id),
-                              payload: contact._id || contact.id
-                            });
-                          }}
-                          className="px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 text-[12px] font-bold rounded-full transition active:scale-95"
-                        >
-                          Remove
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setConfirmAction({
-                              title: 'Block User?',
-                              description: `Block ${contact.username}? They won't be able to message you.`,
-                              confirmText: 'Block',
-                              confirmColor: 'text-[#FF3B30] font-bold',
-                              action: () => handleBlockUser(contact._id || contact.id),
-                              payload: contact._id || contact.id
-                            });
-                          }}
-                          className="px-3 py-1.5 bg-gray-100 text-gray-700 hover:bg-gray-200 text-[12px] font-bold rounded-full transition active:scale-95"
-                        >
-                          Block
-                        </button>
-                      </div>
-                    </div>
-                  ))
                 )}
+
               </div>
             )}
 

@@ -3,14 +3,43 @@ import api from '../utils/api';
 import { getSocket } from '../utils/socket';
 
 export const useChatStore = create((set, get) => ({
+  // 🔥 UPGRADED: Robust Call State Management (Destroys Ghosts)
   callState: null, 
-  setCallState: (state) => set({ callState: state }),
+  setCallState: (updates) => set((state) => {
+    if (updates === null) return { callState: null };
+    
+    // If we are starting a fresh call (initiating or receiving), overwrite everything to kill ghosts
+    if (updates.isInitiator || updates.isReceivingCall) {
+      return { callState: updates };
+    }
+    
+    // Otherwise, safely merge micro-updates (like tokens or callStatus)
+    return { callState: { ...state.callState, ...updates } };
+  }),
+  clearCallState: () => set({ callState: null }),
+
+  // 🔥 NEW: Securely fetch LiveKit Token from backend
+  generateLiveKitToken: async (roomName, participantName) => {
+    try {
+      const res = await api.post('/call/token', { roomName, participantName });
+      const token = res.data.token;
+      
+      set((state) => ({
+        callState: state.callState ? { ...state.callState, livekitToken: token } : null
+      }));
+      
+      return token;
+    } catch (error) {
+      console.error('Failed to fetch LiveKit token:', error);
+      return null;
+    }
+  },
+
   contacts: [],
   inbox: [], 
   activeContact: null,
   messages: {},
 
-  // 🔥 NEW: Hidden Chats State (Persists across reloads)
   hiddenChats: JSON.parse(localStorage.getItem('hiddenChats')) || [],
 
   hasMore: {}, 
@@ -18,12 +47,13 @@ export const useChatStore = create((set, get) => ({
 
   typingUsers: {},
   requests: [],
+  sentRequests: [],
+  blockedUsers: [], 
   onlineUsers: [],
   unread: {}, 
 
   setOnlineUsers: (users) => set({ onlineUsers: users }),
 
-  // 🔥 NEW: Hide / Unhide Actions
   hideChat: (contactId) => set(state => {
     const updated = [...new Set([...state.hiddenChats, contactId])];
     localStorage.setItem('hiddenChats', JSON.stringify(updated));
@@ -42,7 +72,6 @@ export const useChatStore = create((set, get) => ({
       return; 
     }
 
-    // 🔥 THE FIX: If they open a chat from the search bar, instantly unhide them
     const contactId = contact._id || contact.id;
     if (get().hiddenChats.includes(contactId)) {
       get().unhideChat(contactId);
@@ -50,10 +79,7 @@ export const useChatStore = create((set, get) => ({
 
     set(state => ({
       activeContact: contact,
-      unread: {
-        ...state.unread,
-        [contactId]: 0 
-      }
+      unread: { ...state.unread, [contactId]: 0 }
     }));
   },
 
@@ -86,11 +112,18 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
+  loadBlockedUsers: async () => {
+    try {
+      const res = await api.get('/users/blocked');
+      set({ blockedUsers: Array.isArray(res.data) ? res.data : [] });
+    } catch (err) {
+      set({ blockedUsers: [] });
+    }
+  },
+
   loadMessages: async (roomId, page = 1) => {
     try {
-      console.log(`📡 Fetching messages for room: ${roomId}, page: ${page}`);
       const res = await api.get(`/chat/${roomId}?page=${page}&limit=50`);
-      console.log(`✅ Backend returned ${res.data.length} messages!`, res.data);
       
       set(state => {
         const existingMessages = state.messages[roomId] || [];
@@ -103,23 +136,16 @@ export const useChatStore = create((set, get) => ({
         };
       });
     } catch (err) {
-      console.error("❌ FAILED TO LOAD MESSAGES:", err.response?.data || err.message);
+      console.error("Failed to load messages");
     }
   },
 
   addMessage: (roomId, newMessage) => {
     set((state) => {
       const currentMessages = state.messages[roomId] || [];
-      
-      const isDuplicate = currentMessages.some(
-        (msg) => (msg._id || msg.id) === (newMessage._id || newMessage.id)
-      );
+      const isDuplicate = currentMessages.some(msg => (msg._id || msg.id) === (newMessage._id || newMessage.id));
+      if (isDuplicate) return state; 
 
-      if (isDuplicate) {
-        return state; 
-      }
-
-      // 🔥 AUTO-UNHIDE: If a new message hits the room, ensure the chat reappears in the sidebar
       let newHiddenChats = state.hiddenChats;
       const [u1, u2] = roomId.split('_');
       if (newHiddenChats.includes(u1) || newHiddenChats.includes(u2)) {
@@ -129,10 +155,7 @@ export const useChatStore = create((set, get) => ({
 
       return {
         hiddenChats: newHiddenChats,
-        messages: {
-          ...state.messages,
-          [roomId]: [...currentMessages, newMessage]
-        }
+        messages: { ...state.messages, [roomId]: [...currentMessages, newMessage] }
       };
     });
   },
@@ -141,12 +164,8 @@ export const useChatStore = create((set, get) => ({
     set(state => {
       const roomMsgs = state.messages[roomId];
       if (!roomMsgs) return state;
-
       return {
-        messages: {
-          ...state.messages,
-          [roomId]: roomMsgs.filter(m => (m._id || m.id) !== messageId)
-        }
+        messages: { ...state.messages, [roomId]: roomMsgs.filter(m => (m._id || m.id) !== messageId) }
       };
     });
   },
@@ -155,7 +174,6 @@ export const useChatStore = create((set, get) => ({
     set(state => {
       const roomMsgs = state.messages[roomId];
       if (!roomMsgs) return state;
-
       return {
         messages: {
           ...state.messages,
@@ -168,27 +186,19 @@ export const useChatStore = create((set, get) => ({
   updateMessageReactions: (roomId, msgId, newReactions) => {
     set(state => {
       const roomMsgs = state.messages[roomId];
-      const updatedMessages = roomMsgs 
-        ? roomMsgs.map(m => (m._id || m.id) === msgId ? { ...m, reactions: newReactions } : m)
-        : [];
+      const updatedMessages = roomMsgs ? roomMsgs.map(m => (m._id || m.id) === msgId ? { ...m, reactions: newReactions } : m) : [];
 
       const updatedInbox = (state.inbox || []).map(inboxItem => {
         if (inboxItem.lastMessage && (inboxItem.lastMessage._id || inboxItem.lastMessage.id) === msgId) {
           return {
             ...inboxItem,
-            lastMessage: {
-              ...inboxItem.lastMessage,
-              reactions: newReactions
-            }
+            lastMessage: { ...inboxItem.lastMessage, reactions: newReactions }
           };
         }
         return inboxItem;
       });
 
-      return {
-        messages: { ...state.messages, [roomId]: updatedMessages },
-        inbox: updatedInbox
-      };
+      return { messages: { ...state.messages, [roomId]: updatedMessages }, inbox: updatedInbox };
     });
   },
 
@@ -207,22 +217,22 @@ export const useChatStore = create((set, get) => ({
     set(state => ({ requests: [...(state.requests || []), request] }));
   },
 
-  acceptRequest: async (requestId) => {
+  acceptRequest: async (senderId) => {
     try {
-      await api.put(`/users/request/${requestId}`, { action: 'accept' });
+      await api.put(`/users/request/${senderId}`, { action: 'accept' });
       set(state => ({
-        requests: (state.requests || []).filter(r => (r._id || r.id) !== requestId)
+        requests: (state.requests || []).filter(r => r.sender !== senderId)
       }));
       get().loadContacts();
       get().loadInbox(); 
     } catch {}
   },
 
-  declineRequest: async (requestId) => {
+  declineRequest: async (senderId) => {
     try {
-      await api.put(`/users/request/${requestId}`, { action: 'decline' });
+      await api.put(`/users/request/${senderId}`, { action: 'decline' });
       set(state => ({
-        requests: (state.requests || []).filter(r => (r._id || r.id) !== requestId)
+        requests: (state.requests || []).filter(r => r.sender !== senderId)
       }));
     } catch {}
   },
@@ -257,5 +267,22 @@ export const useChatStore = create((set, get) => ({
       
       return { messages: { ...state.messages, [roomId]: updated } };
     });
-  }
+  },
+
+  loadSentRequests: async () => {
+    try {
+      const res = await api.get('/notifications/sent');
+      set({ sentRequests: Array.isArray(res.data) ? res.data : [] });
+    } catch (err) {
+      set({ sentRequests: [] });
+    }
+  },
+
+  addSentRequest: (userId) => set(state => ({ 
+    sentRequests: [...new Set([...state.sentRequests, userId])] 
+  })),
+
+  removeSentRequest: (userId) => set(state => ({ 
+    sentRequests: state.sentRequests.filter(id => id !== userId) 
+  })),
 }));
