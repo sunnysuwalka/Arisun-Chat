@@ -26,27 +26,38 @@ router.post('/file', (req, res, next) => {
 });
 
 // --- 2. PROFILE AVATAR ROUTE ---
-router.post('/avatar', (req, res, next) => {
-  // Catching the 'avatar' field from the frontend
+// --- 2. PROFILE AVATAR ROUTE ---
+// 🔥 Added 'protect' so we know whose profile to update
+router.post('/avatar', protect, (req, res, next) => { 
   upload.single('avatar')(req, res, (err) => {
     if (err) {
-      console.error("\n❌ [AVATAR MIDDLEWARE CRASH] Exact Error:", JSON.stringify(err, null, 2));
+      console.error("\n❌ [AVATAR MIDDLEWARE CRASH]", err);
       return res.status(500).json({ message: 'Avatar Upload Error', error: err.message });
     }
     next(); 
   });
-}, (req, res) => {
+}, async (req, res) => { // 🔥 Made this async
   console.log("\n👤 [AVATAR UPLOAD] Successfully passed middleware!");
   try {
     if (!req.file) return res.status(400).json({ message: 'No avatar provided' });
     console.log("✅ [AVATAR SUCCESS] Live URL:", req.file.path);
-    // Return just the URL for the user profile
+    
+    // 🔥 THE FIX: Update the database!
+    // Note: Change 'profilePic' to whatever the field is called in your User schema (e.g., 'pic', 'avatar')
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id, 
+      { profilePic: req.file.path }, 
+      { new: true }
+    ).select('-password');
+
     res.status(200).json({ 
-      url: req.file.path 
+      url: req.file.path,
+      user: updatedUser // Send the updated user back to the frontend
     }); 
   } catch (error) {
     res.status(500).json({ message: 'Avatar upload failed', error: error.message });
   }
 });
+
 
 module.exports = router;
