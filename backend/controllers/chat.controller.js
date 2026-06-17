@@ -1,5 +1,5 @@
 const Inbox = require('../models/Inbox');
-const User = require('../models/User');
+const User = require('../models/user');
 const Message = require('../models/Message');
 
 exports.getInbox = async (req, res) => {

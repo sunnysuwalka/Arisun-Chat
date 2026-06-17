@@ -8,8 +8,8 @@ const connectDB = require('./config/db');
 
 const Inbox = require('./models/Inbox');
 const Message = require('./models/Message');
-const User = require('./models/User');
-const Chat = require('./models/Chat'); 
+const User = require('./models/user');
+const Chat = require('./models/chat'); 
 
 const app = express();
 const server = http.createServer(app);
