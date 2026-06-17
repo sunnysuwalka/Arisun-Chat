@@ -9,7 +9,9 @@ import toast from 'react-hot-toast';
 import { LiveKitRoom, VideoConference, RoomAudioRenderer } from '@livekit/components-react';
 import '@livekit/components-styles';
 
-const LIVEKIT_URL = "wss://arisun-chat-prm2on5c.livekit.cloud";
+// 🔥 DYNAMIC CONFIGURATION
+const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL || process.env.REACT_APP_LIVEKIT_URL || "wss://arisun-chat-prm2on5c.livekit.cloud";
+
 
 const formatSec = (sec) => {
   const m = Math.floor(sec / 60);
