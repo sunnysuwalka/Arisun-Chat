@@ -1,12 +1,13 @@
-const cloudinary = require('cloudinary').v2;
+const cloudinaryBase = require('cloudinary'); // 🔥 1. Grab the base object
+const cloudinary = cloudinaryBase.v2;         // 🔥 2. Extract v2 for our own config
 const multerCloudinary = require('multer-storage-cloudinary');
-const multer = require('multer'); // 🔥 1. THE MISSING DEPENDENCY
+const multer = require('multer'); 
 
-// Dynamically grab the constructor regardless of which package version is installed
 const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
 console.log("☁️ [CLOUDINARY] Initializing Cloudinary config...");
 
+// Configure using v2
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -14,7 +15,7 @@ cloudinary.config({
 });
 
 const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary: cloudinaryBase, // 🔥 3. THE FIX: Pass the base object here, NOT v2
   params: {
     folder: 'arisun_chat',
     resource_type: 'auto', 
@@ -22,8 +23,6 @@ const storage = new CloudinaryStorage({
   },
 });
 
-// 🔥 2. WRAP THE STORAGE IN MULTER
 const upload = multer({ storage: storage });
 
-// 🔥 3. EXPORT IT (Adding 'upload' to your export list)
 module.exports = { cloudinary, storage, upload };
