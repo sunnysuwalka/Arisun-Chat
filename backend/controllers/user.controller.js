@@ -1,4 +1,4 @@
-const User = require('../models/user');
+const User = require('../models/User');
 const Notification = require('../models/Notification'); 
 const bcrypt = require('bcryptjs');
 
