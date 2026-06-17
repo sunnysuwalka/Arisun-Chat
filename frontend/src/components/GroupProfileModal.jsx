@@ -9,12 +9,15 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   const { user } = useAuthStore();
   const { contacts, setActiveContact, sentRequests, addSentRequest } = useChatStore();
   
+  // 🔥 THE FIX: Setup local state so the UI updates instantly
+  const [currentGroup, setCurrentGroup] = useState(group);
+  
   const myId = user._id || user.id;
-  const adminId = group.groupAdmin?._id || group.groupAdmin;
+  const adminId = currentGroup.groupAdmin?._id || currentGroup.groupAdmin;
   const isAdmin = adminId === myId;
 
   const [isEditingName, setIsEditingName] = useState(false);
-  const [editName, setEditName] = useState(group.chatName);
+  const [editName, setEditName] = useState(currentGroup.chatName);
   const [uploading, setUploading] = useState(false);
   
   const [showAddMember, setShowAddMember] = useState(false);
@@ -31,10 +34,11 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
       const uploadRes = await api.post('/upload/file', fd);
       
       const res = await api.put('/groups/avatar', {
-        chatId: group._id,
+        chatId: currentGroup._id,
         groupAvatar: uploadRes.data.url
       });
       toast.success('Group avatar updated');
+      setCurrentGroup(res.data); // 🔥 UI Updates instantly
       onGroupUpdate(res.data);
     } catch (error) {
       toast.error('Failed to update avatar');
@@ -43,13 +47,14 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   };
 
   const handleSaveName = async () => {
-    if (!editName.trim() || editName === group.chatName) {
+    if (!editName.trim() || editName === currentGroup.chatName) {
       setIsEditingName(false);
       return;
     }
     try {
-      const res = await api.put('/groups/rename', { chatId: group._id, chatName: editName });
+      const res = await api.put('/groups/rename', { chatId: currentGroup._id, chatName: editName });
       toast.success('Group name updated');
+      setCurrentGroup(res.data); // 🔥 UI Updates instantly
       onGroupUpdate(res.data);
       setIsEditingName(false);
     } catch (error) {
@@ -59,8 +64,9 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
 
   const handleRemoveMember = async (userId) => {
     try {
-      const res = await api.put('/groups/groupremove', { chatId: group._id, userId });
+      const res = await api.put('/groups/groupremove', { chatId: currentGroup._id, userId });
       toast.success('Member removed');
+      setCurrentGroup(res.data); // 🔥 UI Updates instantly
       onGroupUpdate(res.data);
     } catch (error) {
       toast.error('Failed to remove member');
@@ -69,8 +75,9 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
 
   const handleAddNewMember = async (userId) => {
     try {
-      const res = await api.put('/groups/groupadd', { chatId: group._id, userId });
+      const res = await api.put('/groups/groupadd', { chatId: currentGroup._id, userId });
       toast.success('Member added!');
+      setCurrentGroup(res.data); // 🔥 UI Updates instantly
       onGroupUpdate(res.data);
       setShowAddMember(false); 
     } catch (error) {
@@ -88,7 +95,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
     }
   };
 
-  const sortedMembers = [...(group.users || [])].sort((a, b) => {
+  const sortedMembers = [...(currentGroup.users || [])].sort((a, b) => {
     const aId = a._id || a.id;
     const bId = b._id || b.id;
     if (aId === myId) return -1;
@@ -101,7 +108,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   });
 
   const availableContacts = contacts?.filter(contact => {
-    return !group.users.some(u => (u._id || u.id) === (contact._id || contact.id));
+    return !currentGroup.users.some(u => (u._id || u.id) === (contact._id || contact.id));
   });
 
   return (
@@ -115,7 +122,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
           </button>
           
           <div className={`relative mb-4 ${isAdmin ? 'group cursor-pointer' : ''}`} onClick={() => isAdmin && fileInputRef.current?.click()}>
-            <Avatar user={group} size={90} className="shadow-lg border-4 border-white" />
+            <Avatar user={currentGroup} size={90} className="shadow-lg border-4 border-white" />
             {isAdmin && (
               <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                 {uploading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <CameraIcon />}
@@ -131,13 +138,13 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-gray-900">{group.chatName}</h2>
+              <h2 className="text-2xl font-bold text-gray-900">{currentGroup.chatName}</h2>
               {isAdmin && (
                 <button onClick={() => setIsEditingName(true)} className="text-gray-400 hover:text-[#007AFF] transition"><EditIcon /></button>
               )}
             </div>
           )}
-          <p className="text-sm text-gray-500 font-medium mt-1">Group • {group.users?.length || 0} members</p>
+          <p className="text-sm text-gray-500 font-medium mt-1">Group • {currentGroup.users?.length || 0} members</p>
         </div>
 
         {/* Dynamic List Area */}
@@ -193,7 +200,6 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
                 const isMe = memberId === myId;
                 const isGroupAdmin = memberId === adminId;
                 
-                // 🔥 THE FIX: Extract full cryptographic profile from secure contacts vault
                 const fullContactInfo = contacts?.find(c => (c._id || c.id) === memberId);
                 const isFriend = !!fullContactInfo;
                 const hasSent = sentRequests.includes(memberId);

@@ -28,7 +28,7 @@ router.post('/file', (req, res, next) => {
   }
 });
 
-// --- 2. PROFILE AVATAR ROUTE ---
+
 // --- 2. PROFILE AVATAR ROUTE ---
 // 🔥 Added 'protect' so we know whose profile to update
 router.post('/avatar', protect, (req, res, next) => { 
@@ -47,9 +47,10 @@ router.post('/avatar', protect, (req, res, next) => {
     
     // 🔥 THE FIX: Update the database!
     // Note: Change 'profilePic' to whatever the field is called in your User schema (e.g., 'pic', 'avatar')
+    // 🔥 THE FIX: Update the database!
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id, 
-      { profilePic: req.file.path }, 
+      { avatar: req.file.path }, // 🚨 CHANGED 'profilePic' to 'avatar' to match your User.js
       { new: true }
     ).select('-password');
 

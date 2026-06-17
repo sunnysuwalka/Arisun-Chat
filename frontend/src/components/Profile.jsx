@@ -51,15 +51,18 @@ export default function Profile({ onClose }) {
     setUploadingAvatar(true);
     try {
       const fd = new FormData();
-      fd.append('file', file);
+      // 🚨 CRITICAL: The name here MUST be 'avatar' to match upload.single('avatar') in the backend
+      fd.append('avatar', file); 
       
-      const uploadRes = await api.post('/upload/file', fd);
-      const profileRes = await api.put('/users/profile', { avatar: uploadRes.data.url });
+      // 🔥 1-Step Upload and Database Update using our dedicated route
+      const res = await api.post('/upload/avatar', fd);
       
-      if (setAuthUser) setAuthUser(profileRes.data.user || { ...user, avatar: uploadRes.data.url });
+      // 🔥 Instantly update global state so the UI changes without refreshing
+      if (setAuthUser) setAuthUser(res.data.user);
       
       toast.success('Profile portrait updated!');
     } catch (err) {
+      console.error(err);
       toast.error('Failed to upload image. Please try again.');
     } finally {
       setUploadingAvatar(false);

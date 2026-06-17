@@ -23,8 +23,12 @@ exports.createGroup = async (req, res) => {
       users: users,
       isGroupChat: true,
       groupAdmin: req.user.id,
+      groupAvatar: req.body.groupAvatar // 🔥 THE FIX: Inject the avatar URL into the database
     });
-    const fullGroupChat = await Chat.findOne({ _id: groupChat._id }).populate("users", "-password").populate("groupAdmin", "-password");
+    
+    const fullGroupChat = await Chat.findOne({ _id: groupChat._id })
+      .populate("users", "-password")
+      .populate("groupAdmin", "-password");
     
     const io = getIo();
     if (io && fullGroupChat) {
@@ -116,7 +120,6 @@ exports.removeFromGroup = async (req, res) => {
   res.json(removed);
 };
 
-// 🔥 NEW: Destroys the group for everyone instantly
 exports.deleteGroup = async (req, res) => {
   const { chatId } = req.body;
   const deletedChat = await Chat.findByIdAndUpdate(chatId, { isDeleted: true }, { new: true })
@@ -126,7 +129,6 @@ exports.deleteGroup = async (req, res) => {
 
   const io = getIo();
   if (io) {
-     // Broadcast the death of the group to literally everyone who was ever in it
      deletedChat.users.forEach(u => io.to(u._id.toString()).emit('group:update'));
      deletedChat.removedUsers.forEach(u => io.to(u._id.toString()).emit('group:update'));
   }
