@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { upload } = require('../config/cloudinary');
+const protect = require('../middleware/auth'); 
+const User = require('../models/User');
+
 
 // --- 1. CHAT ATTACHMENT ROUTE ---
 router.post('/file', (req, res, next) => {
