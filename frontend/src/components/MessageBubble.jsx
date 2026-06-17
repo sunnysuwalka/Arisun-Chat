@@ -74,19 +74,13 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     setIsTouchActive(false);
   };
 
-  // 🔥 THE FIX: Quote Scroll Handler
   const handleQuoteClick = (e, targetId) => {
     e.stopPropagation();
     const targetBubble = document.getElementById(`bubble-${targetId}`);
     
     if (targetBubble) {
-      // 1. Scroll it into the center of the screen
       targetBubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      
-      // 2. Add a premium "flash" effect so the user knows which message it is
       targetBubble.classList.add('ring-4', 'ring-[#007AFF]/40', 'transition-all', 'duration-300');
-      
-      // 3. Remove the flash after 1.5 seconds
       setTimeout(() => {
         targetBubble.classList.remove('ring-4', 'ring-[#007AFF]/40');
       }, 1500);
@@ -112,6 +106,9 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
   }
 
   const renderContent = () => {
+    // 🔥 THE OMNI-CATCHER: Grabs the URL regardless of database schema naming
+    const actualMediaUrl = message.url || message.fileUrl || message.mediaUrl || message.image || message.attachment;
+
     if (isCallLog) {
       const callType = callData.type || 'audio';
       const status = callData.status || 'missed';
@@ -148,12 +145,12 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     if (message.type === 'image') {
       return (
         <div className="relative inline-block w-full">
-          <img src={message.url} alt="attachment" onClick={(e) => { e.stopPropagation(); setIsImageOpen(true); }} className={`w-full max-w-[220px] sm:max-w-[300px] rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer object-cover border border-gray-100 shadow-sm`} />
+          <img src={actualMediaUrl} alt="attachment" onClick={(e) => { e.stopPropagation(); setIsImageOpen(true); }} className={`w-full max-w-[220px] sm:max-w-[300px] rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer object-cover border border-gray-100 shadow-sm`} />
           <span className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-md text-white/90 text-[10px] px-1.5 py-0.5 rounded-full z-10 pointer-events-none tracking-wide">{formatTime(message.createdAt)}</span>
           {isImageOpen && (
             <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
               <button onClick={(e) => { e.stopPropagation(); setIsImageOpen(false); }} className="absolute top-6 right-6 text-white text-3xl font-light hover:opacity-75 z-[110]">&times;</button>
-              <img src={message.url} className="max-w-full max-h-[90vh] object-contain rounded-lg" alt="fullscreen" />
+              <img src={actualMediaUrl} className="max-w-full max-h-[90vh] object-contain rounded-lg" alt="fullscreen" />
             </div>
           )}
         </div>
@@ -164,11 +161,11 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
       return (
         <div className="relative inline-block w-full">
           <div onClick={(e) => { e.stopPropagation(); setIsVideoOpen(true); }} className={`w-[220px] sm:w-[260px] h-[140px] sm:h-[160px] bg-gray-900 rounded-[18px] sm:rounded-[20px] ${isMine ? 'rounded-br-sm' : 'rounded-bl-sm'} cursor-pointer flex items-center justify-center relative overflow-hidden shadow-sm`}>
-             <video src={message.url} className="absolute inset-0 w-full h-full object-cover opacity-60" />
+             <video src={actualMediaUrl} className="absolute inset-0 w-full h-full object-cover opacity-60" />
              <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white/30 backdrop-blur-md rounded-full flex items-center justify-center z-10"><svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg></div>
           </div>
           <span className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-md text-white/90 text-[10px] px-1.5 py-0.5 rounded-full z-10 pointer-events-none tracking-wide">{formatTime(message.createdAt)}</span>
-          {isVideoOpen && <CustomVideoPlayer url={message.url} onClose={(e) => { e?.stopPropagation(); setIsVideoOpen(false); }} />}
+          {isVideoOpen && <CustomVideoPlayer url={actualMediaUrl} onClose={(e) => { e?.stopPropagation(); setIsVideoOpen(false); }} />}
         </div>
       );
     }
@@ -176,7 +173,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     if (message.type === 'audio') {
       return (
         <div className="flex flex-col w-[200px] sm:w-[240px] pt-1 pb-0.5">
-          <CustomAudioPlayer url={message.url} isMine={isMine} />
+          <CustomAudioPlayer url={actualMediaUrl} isMine={isMine} />
           <div className="flex items-center justify-end mt-1 mb-[-4px]">
             <span className={`text-[10px] whitespace-nowrap tracking-wide ${isMine ? 'text-blue-100' : 'text-gray-400'}`}>{formatTime(message.createdAt)}</span>
           </div>
@@ -187,7 +184,7 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
     if (message.type === 'file') {
       return (
         <div className="flex items-end gap-2 sm:gap-3 flex-wrap">
-          <a href={message.url} target="_blank" rel="noreferrer" className="flex items-center gap-2">
+          <a href={actualMediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2">
             <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg"><svg className="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg></div>
             <span className="underline decoration-1 underline-offset-2 text-sm sm:text-base">Download File</span>
           </a>
@@ -198,7 +195,6 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
 
     return (
       <div className="flex flex-col gap-1 w-full">
-        {/* 🔥 THE FIX: Attached Quote Click Handler & Cursor UI */}
         {repliedToMessage && (
           <div 
             onClick={(e) => handleQuoteClick(e, repliedToMessage._id || repliedToMessage.id)}
@@ -319,7 +315,6 @@ export default function MessageBubble({ message, isMine, isLastSeen, onDelete, o
           )}
         </div>
 
-        {/* 🔥 THE FIX: Attached ID to the Bubble */}
         <div id={`bubble-${message._id || message.id}`} className={`relative ${bubbleStyle}`}>
           {renderContent()}
 

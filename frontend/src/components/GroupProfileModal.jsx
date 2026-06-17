@@ -9,7 +9,6 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   const { user } = useAuthStore();
   const { contacts, setActiveContact, sentRequests, addSentRequest } = useChatStore();
   
-  // 🔥 THE FIX: Setup local state so the UI updates instantly
   const [currentGroup, setCurrentGroup] = useState(group);
   
   const myId = user._id || user.id;
@@ -24,26 +23,42 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   
   const fileInputRef = useRef(null);
 
+  
   const handleAvatarUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
+    
     try {
       const fd = new FormData();
       fd.append('file', file);
       const uploadRes = await api.post('/upload/file', fd);
       
+      // 🔥 Safety Net: Look in the standard URL field, OR inside the raw Cloudinary object
+      const actualUrl = uploadRes.data.url || uploadRes.data.rawFile?.secure_url || uploadRes.data.rawFile?.path;
+      
+      if (!actualUrl) {
+        toast.error("Image processed, but URL is hidden. Check console.");
+        console.error("RAW SERVER DATA:", uploadRes.data);
+        setUploading(false);
+        return;
+      }
+
       const res = await api.put('/groups/avatar', {
-        chatId: currentGroup._id,
-        groupAvatar: uploadRes.data.url
+        chatId: currentGroup._id || currentGroup.id,
+        groupAvatar: actualUrl
       });
+      
       toast.success('Group avatar updated');
-      setCurrentGroup(res.data); // 🔥 UI Updates instantly
-      onGroupUpdate(res.data);
+      setCurrentGroup(res.data); 
+      if (onGroupUpdate) onGroupUpdate(res.data);
+      
     } catch (error) {
       toast.error('Failed to update avatar');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
-    setUploading(false);
   };
 
   const handleSaveName = async () => {
@@ -54,7 +69,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
     try {
       const res = await api.put('/groups/rename', { chatId: currentGroup._id, chatName: editName });
       toast.success('Group name updated');
-      setCurrentGroup(res.data); // 🔥 UI Updates instantly
+      setCurrentGroup(res.data); 
       onGroupUpdate(res.data);
       setIsEditingName(false);
     } catch (error) {
@@ -66,7 +81,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
     try {
       const res = await api.put('/groups/groupremove', { chatId: currentGroup._id, userId });
       toast.success('Member removed');
-      setCurrentGroup(res.data); // 🔥 UI Updates instantly
+      setCurrentGroup(res.data); 
       onGroupUpdate(res.data);
     } catch (error) {
       toast.error('Failed to remove member');
@@ -77,7 +92,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
     try {
       const res = await api.put('/groups/groupadd', { chatId: currentGroup._id, userId });
       toast.success('Member added!');
-      setCurrentGroup(res.data); // 🔥 UI Updates instantly
+      setCurrentGroup(res.data); 
       onGroupUpdate(res.data);
       setShowAddMember(false); 
     } catch (error) {
@@ -166,7 +181,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
             )}
           </div>
 
-          {/* 🔥 VIEW 1: ADD NEW MEMBER */}
+          {/* VIEW 1: ADD NEW MEMBER */}
           {showAddMember ? (
             <div className="animate-fade-in">
               {availableContacts.length > 0 ? (
@@ -193,7 +208,7 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
             </div>
           ) : (
             
-          /* 🔥 VIEW 2: STANDARD MEMBERS LIST */
+          /* VIEW 2: STANDARD MEMBERS LIST */
             <div className="animate-fade-in">
               {sortedMembers.map(member => {
                 const memberId = member._id || member.id;
@@ -244,7 +259,6 @@ export default function GroupProfileModal({ group, onClose, onGroupUpdate }) {
   );
 }
 
-// Icons
 const CloseIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>);
 const CameraIcon = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>);
 const EditIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>);

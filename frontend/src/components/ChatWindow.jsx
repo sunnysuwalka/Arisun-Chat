@@ -51,7 +51,7 @@ export default function ChatWindow({ contact }) {
     messages, loadMessages, typingUsers, loadContacts, loadInbox, 
     removeMessage, updateMessage, setActiveContact, setCallState, 
     hasMore, roomPages, contacts, sentRequests, addSentRequest,
-    blockedUsers, loadBlockedUsers
+    blockedUsers, loadBlockedUsers, addMessage
   } = useChatStore();
   
   const { user, privateKeys } = useAuthStore();
@@ -75,7 +75,6 @@ export default function ChatWindow({ contact }) {
   
   const isBlockedByMe = blockedUsers?.some(u => (u._id || u.id) === contactId);
 
-  // 🔥 ROLES & LOCKS
   const adminId = String(contact?.groupAdmin?._id || contact?.groupAdmin);
   const isAdmin = isGroupChat && adminId === myIdStr;
   const isGroupDeleted = contact?.isDeleted === true;
@@ -83,7 +82,6 @@ export default function ChatWindow({ contact }) {
   const isActiveGroupMember = isGroupChat && contact?.users?.some(u => String(u._id || u.id || u) === myIdStr);
   const isRemovedFromGroup = isGroupChat && !isActiveGroupMember;
 
-  // Interaction Lock
   const canInteract = isGroupChat ? (!isRemovedFromGroup && !isGroupDeleted) : (isFriend && !isBlockedByMe);
 
   const handleStartCall = () => {
@@ -105,10 +103,50 @@ export default function ChatWindow({ contact }) {
     setUnreadCount(0);
   }, [roomId]);
 
+  const activeChatRef = useRef({ roomId, contactId });
+  useEffect(() => {
+    activeChatRef.current = { roomId, contactId };
+  }, [roomId, contactId]);
+
+  useEffect(() => {
+    if (!myId) return;
+
+    const handleIncomingMessage = (payload) => {
+      const actualMsg = payload.message || payload.newMessage || payload.data || payload;
+      const current = activeChatRef.current;
+      
+      const senderIdStr = String(actualMsg.sender?._id || actualMsg.sender?.id || actualMsg.sender);
+      const contactIdStr = String(current.contactId);
+      const targetRoomStr = String(payload.roomId || payload.chatId || actualMsg.roomId);
+      const currentRoomStr = String(current.roomId);
+
+      const isRoomMatch = targetRoomStr !== "undefined" && targetRoomStr === currentRoomStr;
+      const isSenderMatch = senderIdStr === contactIdStr;
+
+      if (isRoomMatch || isSenderMatch || targetRoomStr === "undefined") {
+        addMessage(current.roomId, actualMsg);
+      }
+      
+      loadInbox(); 
+    };
+
+    socket.on('message:new', handleIncomingMessage);
+    socket.on('message:received', handleIncomingMessage);
+    socket.on('receive_message', handleIncomingMessage);
+
+    return () => {
+      socket.off('message:new', handleIncomingMessage);
+      socket.off('message:received', handleIncomingMessage);
+      socket.off('receive_message', handleIncomingMessage);
+    };
+  }, [socket, addMessage, loadInbox, myId]); 
+
   useEffect(() => {
     if (!contact || !myId) return;
     
-    const joinRoom = () => socket.emit('room:join', roomId);
+    const joinRoom = () => {
+      socket.emit('room:join', roomId);
+    };
     
     joinRoom();
     loadMessages(roomId, 1); 
@@ -119,11 +157,10 @@ export default function ChatWindow({ contact }) {
     cancelRecording();
 
     socket.on('connect', joinRoom);
-
     return () => {
       socket.off('connect', joinRoom);
     };
-  }, [contactId, roomId, myId, socket, loadMessages, loadBlockedUsers, isGroupChat]);
+  }, [roomId, contactId, myId, socket, isGroupChat]);
 
   const handleScroll = async () => {
     if (!chatContainerRef.current) return;
@@ -206,8 +243,9 @@ export default function ChatWindow({ contact }) {
     }, 2000);
   };
 
+  // 🔥 KEYBINDING UPDATE: Enter = Send, Shift+Enter = New Line
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage(e);
     }
@@ -307,6 +345,7 @@ export default function ChatWindow({ contact }) {
           replyTo: replyingTo ? (replyingTo._id || replyingTo.id) : null 
         }
       });
+      
       setReplyingTo(null);
     } catch {
       toast.error('Upload failed');
@@ -379,6 +418,7 @@ export default function ChatWindow({ contact }) {
             replyTo: replyingTo ? (replyingTo._id || replyingTo.id) : null 
           }
         });
+
         setReplyingTo(null);
       } catch {
         toast.error('Failed to send voice message');
@@ -396,7 +436,6 @@ export default function ChatWindow({ contact }) {
     });
   };
 
-  // 🔥 MILITARY-GRADE ERROR HANDLING & INSTANT UI LOCKING
   const executeConfirmAction = async () => {
     if (!confirmAction) return;
     const { type, payload } = confirmAction;
@@ -430,16 +469,15 @@ export default function ChatWindow({ contact }) {
       else if (type === 'exit_group') {
         const res = await api.put('/groups/remove', { chatId: payload, userId: myId });
         toast.success('You left the group');
-        setActiveContact(res.data); // Instantly passes the updated group object to lock the screen
+        setActiveContact(res.data);
       }
       else if (type === 'delete_group') {
         const res = await api.put('/groups/delete', { chatId: payload });
         toast.success('Group deleted');
-        setActiveContact(res.data); // Instantly passes the updated group object to lock the screen
+        setActiveContact(res.data); 
       }
     } catch (err) {
       console.error("Action Failed:", err);
-      // 🔥 The new error ripper: tells you exactly why the backend rejected the action
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || "Failed to execute action";
       toast.error(`Action Failed: ${errorMsg}`);
     }
@@ -568,7 +606,6 @@ export default function ChatWindow({ contact }) {
             </div>
           </div>
 
-          {/* Unified Actions */}
           <div className="flex items-center gap-4 shrink-0 ml-2">
             {canInteract && (
               <button 
@@ -603,7 +640,6 @@ export default function ChatWindow({ contact }) {
                     </>
                   )}
 
-                  {/* Group Exit & Delete Options */}
                   {isGroupChat && !isGroupDeleted && (
                     <>
                       <div className="h-[1px] bg-gray-100 my-1 mx-4" />
@@ -685,7 +721,6 @@ export default function ChatWindow({ contact }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* FLOATING SCROLL-TO-BOTTOM BUTTON */}
       {isScrolledUp && (
         <div className="absolute right-4 sm:right-6 bottom-[85px] sm:bottom-[95px] z-30 animate-fade-in">
           <button
@@ -750,7 +785,7 @@ export default function ChatWindow({ contact }) {
                     value={text}
                     onChange={handleTextChange}
                     onKeyDown={handleKeyDown}
-                    placeholder={editingMessage ? "Edit message..." : "Type a message (Shift+Enter to send)..."}
+                    placeholder={editingMessage ? "Edit message..." : "Type a message..."}
                     rows={text.split('\n').length > 1 ? Math.min(text.split('\n').length, 4) : 1}
                   />
 

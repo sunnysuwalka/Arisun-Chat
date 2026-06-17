@@ -24,7 +24,6 @@ const formatLastMessage = (msg, myId) => {
     if (msg.text && msg.text.startsWith('📞CALL_LOG::')) {
       try {
         const parsed = JSON.parse(msg.text.replace('📞CALL_LOG::', ''));
-        const callType = parsed.type === 'video' ? 'video' : 'audio';
         return parsed.status !== 'connected' ? `Missed call` : `Call ended`;
       } catch (e) {}
     }
@@ -75,18 +74,18 @@ export default function Sidebar({ onSelectContact, activeContact }) {
   }, []);
 
   useEffect(() => {
-    socket.on('request:received', (req) => addRequest(req));
-    socket.on('request:accepted', () => { loadInbox(); loadContacts(); loadSentRequests(); });
-    socket.on('request:declined', (data) => removeSentRequest(data.byUserId));
-    socket.on('inbox:update', () => loadInbox());
-    socket.on('friend:remove', () => { loadContacts(); loadInbox(); });
-    
-    // 🔥 THE FIX: Listen for group changes from the backend and instantly refresh
-    socket.on('group:update', () => fetchGroups()); 
+    // 🔥 THE FIX: Named Handler Functions for targeted cleanup
+    const handleRequestReceived = (req) => addRequest(req);
+    const handleRequestAccepted = () => { loadInbox(); loadContacts(); loadSentRequests(); };
+    const handleRequestDeclined = (data) => removeSentRequest(data.byUserId);
+    const handleInboxUpdate = () => loadInbox();
+    const handleFriendRemove = () => { loadContacts(); loadInbox(); };
+    const handleGroupUpdate = () => fetchGroups(); 
 
-    socket.on('message:new', (msg) => {
+    const handleMessageNew = (msg) => {
       fetchGroups();
-
+      loadInbox(); 
+      
       const isActivelyChatting = activeContact && (activeContact._id === msg.sender || activeContact.id === msg.sender || activeContact._id === msg.roomId);
       if (isActivelyChatting || msg.sender === user?.id || msg.sender === user?._id) return;
 
@@ -114,7 +113,7 @@ export default function Sidebar({ onSelectContact, activeContact }) {
                   if (sContact) onSelectContact(sContact);
                 }
                 toast.dismiss(t.id);
-             }}>
+               }}>
           <div className="flex-1 w-0 p-4">
             <div className="flex items-start">
               <div className="flex-shrink-0 pt-0.5">
@@ -128,16 +127,26 @@ export default function Sidebar({ onSelectContact, activeContact }) {
           </div>
         </div>
       ), { duration: 4000, position: 'top-right' });
-    });
+    };
 
+    // Attach listeners
+    socket.on('request:received', handleRequestReceived);
+    socket.on('request:accepted', handleRequestAccepted);
+    socket.on('request:declined', handleRequestDeclined);
+    socket.on('inbox:update', handleInboxUpdate);
+    socket.on('friend:remove', handleFriendRemove);
+    socket.on('group:update', handleGroupUpdate);
+    socket.on('message:new', handleMessageNew);
+
+    // 🔥 THE FIX: Targeted cleanup prevents ChatWindow assassination
     return () => {
-      socket.off('request:received');
-      socket.off('request:accepted');
-      socket.off('request:declined');
-      socket.off('inbox:update');
-      socket.off('friend:remove');
-      socket.off('group:update');
-      socket.off('message:new');
+      socket.off('request:received', handleRequestReceived);
+      socket.off('request:accepted', handleRequestAccepted);
+      socket.off('request:declined', handleRequestDeclined);
+      socket.off('inbox:update', handleInboxUpdate);
+      socket.off('friend:remove', handleFriendRemove);
+      socket.off('group:update', handleGroupUpdate);
+      socket.off('message:new', handleMessageNew);
     };
   }, [activeContact, contacts, inbox, user, onSelectContact, addRequest, loadInbox, loadContacts, loadSentRequests, removeSentRequest, myGroups]);
 
@@ -161,6 +170,7 @@ export default function Sidebar({ onSelectContact, activeContact }) {
       const res = await api.post('/users/request', { toUserId });
       socket.emit('request:send', { ...res.data.request, toUserId });
       addSentRequest(toUserId);
+      toast.success('Friend request sent!');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
@@ -181,25 +191,21 @@ export default function Sidebar({ onSelectContact, activeContact }) {
     setChatToDelete(null);
   };
 
-  const notificationCount = requests?.length || 0;
+  const finalRenderList = [
+    ...myGroups.map(g => ({ type: 'group', data: g, updatedAt: new Date(g.updatedAt || 0) })),
+    ...inbox
+        .filter(item => item && item.user)
+        .map(i => ({ type: 'dm', data: i.user, lastMessage: i.lastMessage, unreadCount: i.unreadCount, updatedAt: new Date(i.lastMessage?.createdAt || i.updatedAt || 0) }))
+  ]
+  .filter(item => {
+    if (!item.data) return false; 
+    const id = item.type === 'group' ? item.data._id : (item.data._id || item.data.id);
+    return !hiddenChats.includes(id);
+  })
+  .sort((a, b) => b.updatedAt - a.updatedAt);
 
-  const displayList = [...(inbox || [])];
-  contacts?.forEach(contact => {
-    const isInbox = displayList.some(i => (i.user?._id || i.user?.id) === (contact._id || contact.id));
-    if (!isInbox) displayList.push({ user: contact, lastMessage: null, unreadCount: 0 });
-  });
-
-  const visible1on1 = displayList.filter(item => !hiddenChats.includes(item.user?._id || item.user?.id));
-
-  const visibleGroups = myGroups.map(group => ({
-    isGroup: true,
-    chat: group,
-    lastMessage: group.latestMessage,
-    unreadCount: 0 
-  }));
-
-  const finalRenderList = [...visibleGroups, ...visible1on1];
   const searchGroups = myGroups.filter(g => g.chatName.toLowerCase().includes(searchQuery.toLowerCase()));
+  const notificationCount = requests?.length || 0;
 
   return (
     <>
@@ -278,28 +284,26 @@ export default function Sidebar({ onSelectContact, activeContact }) {
               {searchResults?.map(result => {
                 const isFriend = contacts?.some(c => (c._id || c.id) === result._id);
                 const hasSent = sentRequests.includes(result._id);
-                const targetContact = displayList.find(item => (item.user?._id || item.user?.id) === result._id)?.user || result;
 
                 return (
                   <div key={result._id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-xl transition">
                     <div className="flex items-center gap-3">
-                      <Avatar user={targetContact} size={44} />
-                      <p className="font-medium text-gray-900">{targetContact.username}</p>
+                      <Avatar user={result} size={44} />
+                      <p className="font-medium text-gray-900">{result.username}</p>
                     </div>
                     {isFriend ? (
-                      <button onClick={() => { onSelectContact(targetContact); setSearchQuery(''); }} className="text-xs bg-gray-100 text-gray-700 px-4 py-1.5 rounded-full font-bold hover:bg-gray-200 transition">Chat</button>
+                       <button onClick={() => { onSelectContact(result); setSearchQuery(''); }} className="text-xs bg-gray-100 text-gray-700 px-4 py-1.5 rounded-full font-bold hover:bg-gray-200 transition">Chat</button>
                     ) : (
-                      <button disabled={hasSent} onClick={() => sendRequest(result._id)} className={`text-xs px-4 py-1.5 rounded-full font-bold transition ${hasSent ? 'bg-gray-100 text-gray-400' : 'bg-[#007AFF] text-white'}`}>{hasSent ? 'Sent' : 'Add'}</button>
+                       <button disabled={hasSent} onClick={() => sendRequest(result._id)} className={`text-xs px-4 py-1.5 rounded-full font-bold transition ${hasSent ? 'bg-gray-100 text-gray-400' : 'bg-[#007AFF] text-white'}`}>{hasSent ? 'Sent' : 'Add'}</button>
                     )}
                   </div>
                 );
               })}
             </>
           ) : (
-            finalRenderList?.map((item, index) => {
-              
-              if (item.isGroup) {
-                const group = item.chat;
+            finalRenderList.map((item) => {
+              if (item.type === 'group') {
+                const group = item.data;
                 return (
                   <div key={group._id} onClick={() => onSelectContact(group)} className="group flex items-center gap-3 p-3 hover:bg-gray-100 rounded-xl cursor-pointer transition mb-1 relative touch-manipulation">
                     <Avatar user={group} size={48} />
@@ -308,15 +312,15 @@ export default function Sidebar({ onSelectContact, activeContact }) {
                         <p className="font-semibold text-gray-900 truncate">{group.chatName}</p>
                       </div>
                       <p className="text-sm truncate text-gray-500">
-                        {formatLastMessage(item.lastMessage, user?._id || user?.id)}
+                        {formatLastMessage(item.lastMessage || group.latestMessage, user?._id || user?.id)}
                       </p>
                     </div>
                   </div>
                 );
               }
 
-              const contact = item.user;
-              if(!contact) return null;
+              const contact = item.data;
+              if (!contact) return null;
               
               return (
                 <div
