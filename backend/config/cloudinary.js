@@ -1,7 +1,8 @@
 const cloudinary = require('cloudinary').v2;
 const multerCloudinary = require('multer-storage-cloudinary');
+const multer = require('multer'); // 🔥 1. THE MISSING DEPENDENCY
 
-// 🔥 THE FIX: Dynamically grab the constructor regardless of which package version is installed
+// Dynamically grab the constructor regardless of which package version is installed
 const CloudinaryStorage = multerCloudinary.CloudinaryStorage || multerCloudinary;
 
 console.log("☁️ [CLOUDINARY] Initializing Cloudinary config...");
@@ -21,4 +22,8 @@ const storage = new CloudinaryStorage({
   },
 });
 
-module.exports = { cloudinary, storage };
+// 🔥 2. WRAP THE STORAGE IN MULTER
+const upload = multer({ storage: storage });
+
+// 🔥 3. EXPORT IT (Adding 'upload' to your export list)
+module.exports = { cloudinary, storage, upload };
