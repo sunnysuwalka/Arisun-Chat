@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { upload } = require('../config/cloudinary');
+const upload = require('../config/cloudinary');
 
 // --- 1. CHAT ATTACHMENT ROUTE ---
 router.post('/file', (req, res, next) => {
